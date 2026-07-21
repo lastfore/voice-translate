@@ -1,6 +1,8 @@
 # Python 虚拟环境与输出
 seed-vc-env/
+separator-env/
 output/
+input/
 
 # seed-vc 模型权重与运行时产物（体积大或本地生成）
 seed-vc/checkpoints/
