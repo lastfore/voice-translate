@@ -1,0 +1,18 @@
+# Seed-VC 环境与产物
+seed-vc-env/
+output/
+
+# seed-vc 运行时产物（源码需单独 clone）
+seed-vc/
+
+# 安装临时文件
+seed-vc/requirements-no-torch.txt
+
+# Python
+__pycache__/
+*.pyc
+.env
+
+# 本地工具产物
+.playwright-mcp/
+agent-tools/
