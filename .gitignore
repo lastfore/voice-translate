@@ -1,16 +1,29 @@
-# Seed-VC 环境与产物
+# Python 虚拟环境与输出
 seed-vc-env/
 output/
 
-# seed-vc 运行时产物（源码需单独 clone）
-seed-vc/
-
-# 安装临时文件
+# seed-vc 模型权重与运行时产物（体积大或本地生成）
+seed-vc/checkpoints/
+seed-vc/.gradio/
+seed-vc/runs/
+seed-vc/test_waves/
+seed-vc/reconstructed/
+seed-vc/flagged/
+seed-vc/garbages/
+seed-vc/experimental/
+seed-vc/configs/inuse/
 seed-vc/requirements-no-torch.txt
 
-# Python
-__pycache__/
-*.pyc
+# 模型权重文件（含根目录散落的副本）
+seed-vc/**/*.pth
+seed-vc/**/*.pt
+seed-vc/**/*.bin
+seed-vc/**/*.ckpt
+seed-vc/**/*.safetensors
+
+# Python 缓存
+**/__pycache__/
+**/*.pyc
 .env
 
 # 本地工具产物

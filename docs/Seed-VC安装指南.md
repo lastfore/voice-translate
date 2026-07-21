@@ -257,34 +257,18 @@ New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
 
 修改后需重启系统生效。
 
-### 步骤 5：克隆 Seed-VC 并安装依赖
+### 步骤 5：克隆本仓库并安装依赖
 
 ```powershell
-cd D:\code\voice-translate
-git clone https://github.com/Plachtaa/seed-vc.git
-cd seed-vc
+cd D:\code
+git clone https://github.com/lastfore/voice-translate.git
+cd voice-translate\seed-vc
 uv pip install -r requirements.txt
 ```
 
-> 项目已归档（ARCHIVED），但代码与 Hugging Face 预训练模型仍可正常使用。
+> `seed-vc` 源码已纳入本仓库（模型权重除外，首次运行自动下载）。上游参考 [Plachta/seed-vc](https://github.com/Plachtaa/seed-vc)（已归档，但预训练模型仍可用）。
 
-### 步骤 6：添加 .gitignore
-
-在 `D:\code\voice-translate\.gitignore` 中加入：
-
-```gitignore
-# Seed-VC 环境与产物
-seed-vc/
-seed-vc-env/
-output/
-
-# Python
-__pycache__/
-*.pyc
-.env
-```
-
-### 步骤 7：Web UI 启动验证
+### 步骤 6：Web UI 启动验证
 
 **推荐：使用项目启动脚本**
 
@@ -547,9 +531,8 @@ python app_svc.py --fp16 True
 - [ ] **步骤 2** — 创建 `seed-vc-env` 虚拟环境
 - [ ] **步骤 3** — 设置用户级 `HF_ENDPOINT`
 - [ ] **步骤 4** — 安装 PyTorch cu128 并验证 GPU
-- [ ] **步骤 5** — 克隆 `seed-vc` + `uv pip install -r requirements.txt`
-- [ ] **步骤 6** — 添加 `.gitignore`
-- [ ] **步骤 7** — Web UI 启动验证通过
+- [ ] **步骤 5** — 克隆 `voice-translate` + `uv pip install -r seed-vc/requirements.txt`
+- [ ] **步骤 6** — Web UI 启动验证通过
 
 ### 当前状态（2026-07-21）
 
@@ -559,9 +542,8 @@ python app_svc.py --fp16 True
 | 步骤 2 | ✅ 已完成 | `seed-vc-env` 已创建 |
 | 步骤 3 | ✅ 已完成 | `HF_ENDPOINT` + `NO_PROXY` 用户级配置 |
 | 步骤 4 | ✅ 已完成 | PyTorch 2.11.0+cu128，CUDA 可用 |
-| 步骤 5 | ✅ 已完成 | seed-vc 已克隆，依赖已安装 |
-| 步骤 6 | ✅ 已完成 | `.gitignore` 已添加 |
-| 步骤 7 | ✅ 已完成 | Web UI 可在 `http://127.0.0.1:7860/` 访问 |
+| 步骤 5 | ✅ 已完成 | voice-translate 已 clone，`seed-vc` 源码在库内，依赖已安装 |
+| 步骤 6 | ✅ 已完成 | Web UI 可在 `http://127.0.0.1:7860/` 访问 |
 
 ---
 
