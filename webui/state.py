@@ -10,6 +10,7 @@ from typing import Any
 
 from pipeline import paths
 from pipeline.models import ConvertMode, SliceMode, StageName
+from pipeline.stage_params import collect_params, merge_stage_params, merge_wizard_params
 from pipeline.queue import GpuJobQueue
 from pipeline.runner import StageRunner
 from pipeline.store import ProjectStore
@@ -72,6 +73,33 @@ def create_project_ui(
         return False, str(exc)
 
 
+def load_saved_stage_params(
+    project_id: str | None,
+    stage: str,
+    *,
+    wizard_only: bool = False,
+) -> dict[str, Any]:
+    saved: dict[str, Any] = {}
+    if project_id:
+        try:
+            project = _store.get_project(project_id)
+            saved = dict(project.stages[StageName(stage)].params)
+        except KeyError:
+            pass
+    return merge_stage_params(stage, saved, wizard_only=wizard_only)
+
+
+def load_wizard_params(project_id: str | None) -> dict[str, Any]:
+    if not project_id:
+        return merge_wizard_params(None)
+    try:
+        project = _store.get_project(project_id)
+        saved = {name.value: dict(project.stages[name].params) for name in StageName}
+    except KeyError:
+        return merge_wizard_params(None)
+    return merge_wizard_params(saved)
+
+
 def load_project_defaults(project_id: str | None) -> dict[str, Any]:
     if not project_id:
         return {}
@@ -108,6 +136,11 @@ def load_project_defaults(project_id: str | None) -> dict[str, Any]:
         "merge_reference": resolved_merge.get("reference", project.input_audio or ""),
         "merge_profile": mg.params.get("profile", "full"),
         "stage_status_text": _stage_status_line(project_id),
+        "stage_params": {
+            name.value: load_saved_stage_params(project_id, name.value)
+            for name in StageName
+        },
+        "wizard_params": load_wizard_params(project_id),
     }
 
 

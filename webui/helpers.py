@@ -39,7 +39,8 @@ def format_project_choice(summary: dict) -> str:
 
 
 def project_choices(summaries: list[dict]) -> list[tuple[str, str]]:
-    return [(s["id"], format_project_choice(s)) for s in summaries]
+    # Gradio 5 Dropdown/CheckboxGroup: (display_name, value)
+    return [(format_project_choice(s), s["id"]) for s in summaries]
 
 
 def abs_path(value: str | None) -> Path | None:

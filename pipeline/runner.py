@@ -212,6 +212,10 @@ class StageRunner:
                 out_dir,
                 mode=mode,
                 lrc_path=_abs("lrc"),
+                vad_threshold=float(params.get("vad_threshold", 0.45)),
+                min_speech_ms=int(params.get("min_speech_ms", 250)),
+                min_silence_ms=int(params.get("min_silence_ms", 500)),
+                speech_pad_ms=int(params.get("speech_pad_ms", 80)),
                 on_progress=on_progress,
             )
             return {
@@ -219,7 +223,20 @@ class StageRunner:
                     "slices_dir": rel_path(result.slices_dir, root),
                     "manifest": rel_path(result.manifest, root),
                 },
-                "params": {"mode": mode, "slice_count": result.slice_count},
+                "params": {
+                    "mode": mode,
+                    "slice_count": result.slice_count,
+                    **{
+                        k: params[k]
+                        for k in (
+                            "vad_threshold",
+                            "min_speech_ms",
+                            "min_silence_ms",
+                            "speech_pad_ms",
+                        )
+                        if k in params
+                    },
+                },
             }
 
         if stage == StageName.CONVERT:
@@ -242,6 +259,7 @@ class StageRunner:
                 semi_tone_shift=int(params.get("semi_tone_shift", 0)),
                 fp16=bool(params.get("fp16", True)),
                 skip_existing=bool(params.get("skip_existing", True)),
+                limit=int(params.get("limit", 0)),
                 on_progress=on_progress,
             )
             artifacts: dict[str, Any] = {
@@ -279,6 +297,7 @@ class StageRunner:
                 instrumental_gain_db=float(
                     params.get("instrumental_gain_db", params.get("instrumental_gain", 0.0))
                 ),
+                skip_mastering=bool(params.get("skip_mastering", False)),
                 on_progress=on_progress,
             )
             return {
@@ -287,7 +306,19 @@ class StageRunner:
                     "vocals": rel_path(result.vocals, root),
                     "mixed": rel_path(result.mixed, root),
                 },
-                "params": {"profile": profile},
+                "params": {
+                    "profile": profile,
+                    **{
+                        k: params[k]
+                        for k in (
+                            "vocals_gain_db",
+                            "instrumental_gain_db",
+                            "clean_instrumental",
+                            "skip_mastering",
+                        )
+                        if k in params
+                    },
+                },
             }
 
         raise ValueError(f"unknown stage: {stage}")

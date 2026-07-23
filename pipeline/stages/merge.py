@@ -45,6 +45,7 @@ def run_merge(
     clean_instrumental: bool = False,
     vocals_gain_db: float = 0.0,
     instrumental_gain_db: float = 0.0,
+    skip_mastering: bool = False,
     on_progress: Callable[[ProgressEvent], None] | None = None,
 ) -> MergeResult:
     vocals = Path(vocals).resolve()
@@ -85,6 +86,7 @@ def run_merge(
         clean_instrumental_flag=clean_instrumental,
         vocals_gain_db=vocals_gain_db,
         instrumental_gain_db=instrumental_gain_db,
+        skip_mastering=skip_mastering,
     )
     _emit("Merge complete", 100.0)
     return MergeResult(vocals=vocals_out, mixed=mixed_out, merged_dir=output_dir)

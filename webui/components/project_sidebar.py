@@ -50,7 +50,7 @@ def wire_sidebar(
     def _refresh():
         summaries = state.refresh_projects()
         choices = project_choices(summaries)
-        value = choices[0][0] if choices else None
+        value = choices[0][1] if choices else None
         defaults = state.load_project_defaults(value)
         status = defaults.get("stage_status_text", "*无项目*")
         return (

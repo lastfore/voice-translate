@@ -28,3 +28,17 @@ def test_refresh_and_create_project(ui_workspace: Path) -> None:
 
 def test_load_project_defaults_empty() -> None:
     assert state.load_project_defaults(None) == {}
+
+
+def test_project_choices_gradio_tuple_order() -> None:
+    from webui.helpers import format_project_choice, project_choices
+
+    summaries = [
+        {
+            "id": "demo",
+            "display_name": "Demo Song",
+            "stages": {"separate": "done", "slice": "not_run"},
+        }
+    ]
+    choices = project_choices(summaries)
+    assert choices == [(format_project_choice(summaries[0]), "demo")]

@@ -32,18 +32,15 @@ def build_batch_queue(project_state: gr.State) -> None:
     def _refresh_checks():
         summaries = state.get_projects()
         choices = project_choices(summaries)
-        return gr.CheckboxGroup(choices=[c[1] for c in choices], value=[])
+        return gr.CheckboxGroup(choices=choices, value=[])
 
     refresh_btn = gr.Button("刷新项目列表", size="sm")
     refresh_btn.click(_refresh_checks, outputs=[project_checks])
 
-    def _enqueue(selected_labels, stages, cmode, smode, profile):
-        if not selected_labels:
+    def _enqueue(selected_ids, stages, cmode, smode, profile):
+        if not selected_ids:
             return "请选择项目", state.batch_queue_status()
-        # Map label back to id
-        summaries = state.get_projects()
-        id_map = {format_choice(s): s["id"] for s in summaries}
-        ids = [id_map[label] for label in selected_labels if label in id_map]
+        ids = list(selected_ids)
         msg = state.enqueue_batch(ids, stages, {"profile": profile, "mode": cmode})
         return msg, state.batch_queue_status()
 
@@ -64,9 +61,3 @@ def build_batch_queue(project_state: gr.State) -> None:
         return state.batch_queue_status(), "已清除已完成项"
 
     clear_btn.click(_clear, outputs=[queue_view, status])
-
-
-def format_choice(summary: dict) -> str:
-    from webui.helpers import format_project_choice
-
-    return format_project_choice(summary)

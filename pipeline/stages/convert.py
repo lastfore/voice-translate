@@ -40,6 +40,7 @@ def run_convert(
     semi_tone_shift: int = 0,
     fp16: bool = True,
     skip_existing: bool = True,
+    limit: int = 0,
     on_progress: Callable[[ProgressEvent], None] | None = None,
 ) -> ConvertResult:
     reference = Path(reference).resolve()
@@ -160,6 +161,8 @@ def run_convert(
         cmd.append("--no-fp16")
     if skip_existing:
         cmd.append("--skip-existing")
+    if limit > 0:
+        cmd.extend(["--limit", str(limit)])
 
     converted = 0
     total = 0

@@ -40,6 +40,10 @@ def run_slice(
     *,
     mode: str = SliceMode.VAD.value,
     lrc_path: Path | None = None,
+    vad_threshold: float = 0.45,
+    min_speech_ms: int = 250,
+    min_silence_ms: int = 500,
+    speech_pad_ms: int = 80,
     on_progress: Callable[[ProgressEvent], None] | None = None,
 ) -> SliceResult:
     vocals = Path(vocals).resolve()
@@ -74,7 +78,14 @@ def run_slice(
         )
     else:
         mod = _load_script_module("slice_vocals", "slice-vocals.py")
-        written, manifest_path = mod.slice_vocals(vocals, output_dir)
+        written, manifest_path = mod.slice_vocals(
+            vocals,
+            output_dir,
+            threshold=vad_threshold,
+            min_speech_duration_ms=min_speech_ms,
+            min_silence_duration_ms=min_silence_ms,
+            speech_pad_ms=speech_pad_ms,
+        )
 
     count = len(written)
     if count == 0:
