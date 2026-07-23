@@ -15,6 +15,7 @@ seed-vc/garbages/
 seed-vc/experimental/
 seed-vc/configs/inuse/
 seed-vc/requirements-no-torch.txt
+seed-vc/examples/source/ref.flac
 
 # 模型权重文件（含根目录散落的副本）
 seed-vc/**/*.pth
