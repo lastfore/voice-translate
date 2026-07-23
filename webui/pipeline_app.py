@@ -207,7 +207,7 @@ def build_app() -> gr.Blocks:
         def run_separate(pid, mix, *param_values):
             params = {"mix_audio": mix}
             params.update(collect_params(StageName.SEPARATE.value, sep_params.values_to_dict(*param_values)))
-            return _run_stage_stream(pid, StageName.SEPARATE.value, params)
+            yield from _run_stage_stream(pid, StageName.SEPARATE.value, params)
 
         sep_run.click(
             run_separate,
@@ -228,7 +228,7 @@ def build_app() -> gr.Blocks:
                     slice_mode=mode,
                 )
             )
-            return _run_stage_stream(pid, StageName.SLICE.value, params)
+            yield from _run_stage_stream(pid, StageName.SLICE.value, params)
 
         slice_run.click(
             run_slice,
@@ -244,7 +244,7 @@ def build_app() -> gr.Blocks:
             reference = save_reference_audio(pid, ref) if pid and ref else ref
             params = {"mode": mode, "source_vocals": source, "slices_dir": sdir, "reference": reference}
             params.update(collect_params(StageName.CONVERT.value, convert_params.values_to_dict(*param_values)))
-            return _run_stage_stream(pid, StageName.CONVERT.value, params)
+            yield from _run_stage_stream(pid, StageName.CONVERT.value, params)
 
         convert_run.click(
             run_convert,
@@ -266,7 +266,7 @@ def build_app() -> gr.Blocks:
         def run_merge(pid, vocals, inst, ref, profile, *param_values):
             params = {"vocals": vocals, "instrumental": inst, "reference": ref, "profile": profile}
             params.update(collect_params(StageName.MERGE.value, merge_params.values_to_dict(*param_values)))
-            return _run_stage_stream(pid, StageName.MERGE.value, params)
+            yield from _run_stage_stream(pid, StageName.MERGE.value, params)
 
         merge_run.click(
             run_merge,

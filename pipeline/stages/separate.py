@@ -9,7 +9,7 @@ from pathlib import Path
 
 from pipeline import paths
 from pipeline.models import ProgressEvent, StageName
-from pipeline.venv_runner import ProgressLineCallback, run_subprocess, separator_env, separator_python
+from pipeline.venv_runner import ProgressLineCallback, run_subprocess, separator_cli_cmd, separator_env, separator_python
 
 DEFAULT_MODEL = "mel_band_roformer_kim_ft_unwa.ckpt"
 _PROGRESS_RE = re.compile(r"(\d+)%|Processing|Separating", re.IGNORECASE)
@@ -91,8 +91,7 @@ def run_separate(
 
     _emit(f"Separating {mix_audio.name}", 0.0)
 
-    cmd = [
-        "audio-separator",
+    cmd = separator_cli_cmd(
         str(mix_audio),
         "--model_filename",
         model,
@@ -102,9 +101,8 @@ def run_separate(
         "flac",
         "--output_dir",
         str(paths.separated_dir()),
-    ]
+    )
 
-    # On Windows, invoke via separator python -m if audio-separator not directly callable
     result = run_subprocess(cmd, cwd=root, env=separator_env(), on_line=_line_handler)
     if result.returncode != 0:
         detail = (result.stdout or result.stderr or "").strip()

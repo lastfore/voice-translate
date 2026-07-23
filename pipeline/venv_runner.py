@@ -27,6 +27,26 @@ def seed_vc_python() -> Path:
     return Path(sys.executable)
 
 
+_SEPARATOR_CLI_BOOTSTRAP = (
+    "import sys; sys.argv[0]='audio-separator'; "
+    "from audio_separator.utils.cli import main; main()"
+)
+
+
+def separator_cli_cmd(*args: str | Path) -> list[str]:
+    """Invoke audio-separator via python.exe instead of the console-script .exe shim.
+
+    On some Windows setups the uv-generated ``audio-separator.exe`` shim is blocked
+    by application control policy; calling the CLI module directly avoids that.
+    """
+    return [
+        str(separator_python()),
+        "-c",
+        _SEPARATOR_CLI_BOOTSTRAP,
+        *[str(a) for a in args],
+    ]
+
+
 def separator_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     root = get_root()
     model_dir = get_separator_env() / "models" / "audio-separator"

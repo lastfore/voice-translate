@@ -82,19 +82,24 @@ def separated_vocals_path(project_id: str) -> Path | None:
 
 
 def separated_instrumental_path(project_id: str) -> Path | None:
+    """Glob match instrumental stem; MDXC models emit ``(Other)`` instead of ``(Instrumental)``."""
     base = separated_dir()
     if not base.is_dir():
         return None
     for pattern in (
         f"{project_id}_(Instrumental)_*.flac",
         f"{project_id}_(instrumental)_*.flac",
+        f"{project_id}_(Other)_*.flac",
+        f"{project_id}_(other)_*.flac",
     ):
         hit = _glob_first(base, pattern)
         if hit:
             return hit
     for path in sorted(base.glob("*.flac")):
         name_lower = path.name.lower()
-        if project_id.lower() in name_lower and "instrumental" in name_lower:
+        if project_id.lower() not in name_lower or "vocal" in name_lower:
+            continue
+        if "instrumental" in name_lower or "(other)" in name_lower:
             return path
     return None
 

@@ -32,6 +32,17 @@ def test_separated_vocals_glob(root: Path) -> None:
     assert paths.separated_instrumental_path("mysong") == inst
 
 
+def test_separated_instrumental_other_stem(root: Path) -> None:
+    sep = root / "output" / "separated"
+    vocal = sep / "mysong_(vocals)_mel_band_roformer_kim_ft_unwa.flac"
+    vocal.write_bytes(b"x")
+    other = sep / "mysong_(other)_mel_band_roformer_kim_ft_unwa.flac"
+    other.write_bytes(b"x")
+
+    assert paths.separated_vocals_path("mysong") == vocal
+    assert paths.separated_instrumental_path("mysong") == other
+
+
 def test_input_audio_path_multiple_extensions(root: Path) -> None:
     (root / "input" / "demo.wav").write_bytes(b"x")
     assert paths.input_audio_path("demo") == root / "input" / "demo.wav"

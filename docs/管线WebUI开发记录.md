@@ -121,45 +121,7 @@ runner = StageRunner(store)
 
 ---
 
----
-
-## Phase 4：收尾
-
-**状态：** ✅ 已完成  
-**完成日期：** 2026-07-23
-
-### 目标
-
-- 旧 `output/` 目录自动导入（含扁平 `merged/`、separated 文件名发现）
-- 更新 `README.md` 入口说明
-- 端到端测试（mock，无 GPU）
-
-### 交付物
-
-| 变更 | 说明 |
-|------|------|
-| `pipeline/paths.py` | `infer_project_ids_from_separated()`、legacy flat merged 路径 |
-| `pipeline/store.py` | `scan_and_repair` 增强：separated 发现、旧版 `output/merged/mixed.flac` 索引 |
-| `tests/test_e2e.py` | E2E-01/04/05 + 旧项目导入用例 |
-| `tests/test_paths_legacy.py` | 分离文件名解析测试 |
-| `README.md` | 管线 Web UI 快速开始、目录结构、脚本清单 |
-
-### 旧项目兼容规则
-
-1. `output/slices/{id}/`、`output/converted/{id}/`、`input/{id}.*` — 自动 bootstrap `project.json`
-2. `output/separated/{id}_(Vocals)_*.flac` — 从文件名推断项目 ID
-3. 扁平 `output/merged/mixed.flac` — 在**仅一个项目**或**唯一有分离产物**时写入 merge 阶段索引（`legacy_flat: true`），不移动原文件
-
-### 测试
-
-```powershell
-py -m pytest tests/ -q
-# 32 passed
-```
-
-### 手动验收（需本机 GPU）
-
-参见设计文档 §10.3：浏览器访问、向导全流程、刷新恢复状态等。
+## Phase 3：Web UI
 
 **状态：** ✅ 已完成  
 **完成日期：** 2026-07-23
@@ -204,15 +166,106 @@ py -m pytest tests/ -v
 # 25 passed
 ```
 
-### 未包含（Phase 4）
+---
 
-- README 入口更新
-- 真实 GPU 端到端验收
+## Phase 4：收尾
+
+**状态：** ✅ 已完成  
+**完成日期：** 2026-07-23
+
+### 目标
+
+- 旧 `output/` 目录自动导入（含扁平 `merged/`、separated 文件名发现）
+- 更新 `README.md` 入口说明
+- 端到端测试（mock，无 GPU）
+
+### 交付物
+
+| 变更 | 说明 |
+|------|------|
+| `pipeline/paths.py` | `infer_project_ids_from_separated()`、legacy flat merged 路径 |
+| `pipeline/store.py` | `scan_and_repair` 增强：separated 发现、旧版 `output/merged/mixed.flac` 索引 |
+| `tests/test_e2e.py` | E2E-01/04/05 + 旧项目导入用例 |
+| `tests/test_paths_legacy.py` | 分离文件名解析测试 |
+| `README.md` | 管线 Web UI 快速开始、目录结构、脚本清单 |
+
+### 旧项目兼容规则
+
+1. `output/slices/{id}/`、`output/converted/{id}/`、`input/{id}.*` — 自动 bootstrap `project.json`
+2. `output/separated/{id}_(Vocals)_*.flac` — 从文件名推断项目 ID
+3. 扁平 `output/merged/mixed.flac` — 在**仅一个项目**或**唯一有分离产物**时写入 merge 阶段索引（`legacy_flat: true`），不移动原文件
+
+### 测试
+
+```powershell
+py -m pytest tests/ -q
+# 40 passed, 1 skipped（2026-07-24，含 test_merge_partial）
+```
+
+### 待后续验收
+
+- [x] 真实 GPU 端到端：分离 → VAD 切片 → 转换(limit) → 合并（Playwright，见下文）
+- [ ] §10.3 完整清单剩余项（刷新恢复、批量队列、向导全流程）
 
 ---
 
-## Phase 4：收尾（待开始）
+## GPU 实机验收（Playwright）
 
-- [ ] 旧 `output/` 目录自动导入为项目（scan 已部分实现，需 E2E 验证）
-- [ ] 更新 `README.md` 入口说明
-- [ ] 端到端测试：新建项目 → 全流程 → 产物验证
+**状态：** ✅ 核心流程已通过  
+**验收日期：** 2026-07-24  
+**测试工具：** Playwright MCP（`user-playwright`）  
+**测试项目：** `mysong`（`input/mysong.flac` + `input/mysong.lrc`）  
+**UI 路径：** 各阶段 Tab 独立运行（非向导一键全流程）
+
+### 验收方案
+
+| 项 | 取值 |
+|----|------|
+| 切片模式 | **VAD**（不使用 LRC） |
+| 转换模式 | `slice_batch` |
+| 试跑片数 | `limit=3` |
+| 参考音频 | `seed-vc/examples/source/ref.flac`（UI 上传后存为 `input/mysong/reference.flac`） |
+| 合并 Profile | `full` |
+
+对应设计文档 E2E-02 的 **VAD + 部分转换** 变体（非 LRC 全量 42 片）。
+
+### 验收结果
+
+| 阶段 | Tab | 结果 | 关键验证点 |
+|------|-----|------|------------|
+| 词曲分离 | 分离 | ✅ | 日志 `Separation complete`；人声/伴奏试听 5:13；产物写入 `output/separated/` |
+| 声乐切片 | 切片 | ✅ | 模式 `vad`；`Wrote 14 slices`；`manifest.json` 14 条 |
+| 歌声转换 | 转换 | ✅ | `slice_batch` + `limit=3`；`output/converted/mysong/` 3 个 flac |
+| 人声伴奏结合 | 合并 | ✅ | `profile=full`；`output/merged/mysong/mixed.flac`（~39 MB，5:13） |
+
+侧栏阶段指示：●分离 ●切片 ●转换 ●合并 均为完成态。
+
+### 验收中发现的问题与修复
+
+#### 1. ffmpeg 被 Smart App Control 拦截
+
+- **现象：** 分离阶段报 `应用程序控制策略已阻止此文件`；`ffmpeg -version` 失败（Policy ID `{0283ac0f-...}`）。
+- **原因：** Windows 11 Smart App Control 拦截未签名可执行文件（含 Chocolatey shim 与真实 `ffmpeg.exe`）。
+- **处理：** 关闭 Smart App Control 后 `ffmpeg 8.1.2` 恢复正常；分离日志可见 `FFmpeg installed`。
+
+#### 2. `limit=N` 时合并失败
+
+- **现象：** 转换 `limit=3` 成功后，合并报 `Converted slice not found: ..._slice_003.flac`。
+- **原因：** `scripts/merge-audio.py` 的 `build_from_slices()` 遍历完整 manifest（14 片），要求每片均有转换产物。
+- **修复：** 转换产物缺失时回退到 `output/slices/{id}/` 原始切片，stderr 输出 `Warning: converted slice missing, using original` 及汇总 `Slice merge: N converted, M original fallback`。
+- **验证：** CLI 重跑 `limit=3` 全流程合并成功；Playwright 合并 Tab 重试通过。
+
+### 相关变更
+
+| 文件 | 说明 |
+|------|------|
+| `scripts/merge-audio.py` | 部分转换时合并回退原始切片 |
+| `tests/test_merge_partial.py` | 回退逻辑单元测试（需 `librosa`，无则 skip） |
+
+### 未覆盖（§10.3 其余项）
+
+- [ ] 刷新页面后项目状态恢复
+- [ ] 批量队列 2+ 项目串行执行
+- [ ] 向导 Tab 一键全流程
+- [ ] 现有 CLI 脚本独立可用性复测
+

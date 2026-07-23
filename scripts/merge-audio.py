@@ -236,15 +236,28 @@ def build_from_slices(
 
     timeline = np.zeros(timeline_len, dtype=np.float32)
 
+    converted_count = 0
+    fallback_count = 0
     for item in manifest["slices"]:
-        converted_path = converted_dir / item["file"]
-        if not converted_path.exists():
-            raise FileNotFoundError(f"Converted slice not found: {converted_path}")
-
-        converted, conv_sr = load_audio(converted_path)
-        segment = to_mono(resample_audio(converted, conv_sr, TARGET_SR))
-
         original_slice_path = slices_dir / item["file"]
+        converted_path = converted_dir / item["file"]
+        if converted_path.exists():
+            audio_path = converted_path
+            converted_count += 1
+        elif original_slice_path.exists():
+            audio_path = original_slice_path
+            fallback_count += 1
+            print(
+                f"Warning: converted slice missing, using original: {item['file']}",
+                file=sys.stderr,
+            )
+        else:
+            raise FileNotFoundError(
+                f"Neither converted nor original slice found: {converted_path}"
+            )
+
+        converted, conv_sr = load_audio(audio_path)
+        segment = to_mono(resample_audio(converted, conv_sr, TARGET_SR))
         reference_segment = None
         if original_slice_path.exists():
             orig_audio, orig_sr = load_audio(original_slice_path)
@@ -266,6 +279,12 @@ def build_from_slices(
 
         start = int(item["start_ms"] * TARGET_SR / 1000)
         timeline = overlay_segment(timeline, segment, start, fade_in_ms, fade_out_ms, TARGET_SR)
+
+    if fallback_count:
+        print(
+            f"Slice merge: {converted_count} converted, {fallback_count} original fallback",
+            file=sys.stderr,
+        )
 
     return timeline.astype(np.float32)
 
@@ -304,8 +323,9 @@ def clean_instrumental(
 ) -> Path:
     work_dir = Path(tempfile.mkdtemp(prefix="karaoke-clean-"))
     try:
-        cmd = [
-            "audio-separator",
+        from pipeline.venv_runner import separator_cli_cmd, separator_env
+
+        cmd = separator_cli_cmd(
             str(instrumental_path),
             "--model_filename",
             KARAOKE_MODEL,
@@ -315,9 +335,9 @@ def clean_instrumental(
             "flac",
             "--output_dir",
             str(work_dir),
-        ]
+        )
         print(f"Running Karaoke clean: {' '.join(cmd)}")
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, env=separator_env())
 
         candidates = list(work_dir.glob("*Instrumental*.flac")) + list(work_dir.glob("*instrumental*.flac"))
         if not candidates:
