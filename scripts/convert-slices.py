@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -223,6 +224,76 @@ def _collect_slice_files(slices_dir: Path, manifest: Path | None) -> list[Path]:
     )
 
 
+def convert_slices(
+    slices_dir: Path,
+    reference: Path,
+    output_dir: Path,
+    *,
+    manifest: Path | None = None,
+    diffusion_steps: int = 40,
+    length_adjust: float = 1.0,
+    inference_cfg_rate: float = 0.7,
+    auto_f0_adjust: bool = True,
+    semi_tone_shift: int = 0,
+    fp16: bool = True,
+    limit: int = 0,
+    skip_existing: bool = False,
+    on_progress: Callable[[int, int, str], None] | None = None,
+) -> tuple[int, int]:
+    """Convert all slices in *slices_dir*. Returns (success_count, total_count)."""
+    slices_dir = slices_dir.resolve()
+    if not slices_dir.is_dir():
+        raise FileNotFoundError(f"slices directory not found: {slices_dir}")
+
+    reference = reference.resolve()
+    if not reference.is_file():
+        raise FileNotFoundError(f"reference audio not found: {reference}")
+
+    manifest_path = manifest.resolve() if manifest else slices_dir / "manifest.json"
+    if not manifest_path.exists():
+        manifest_path = None
+
+    output_dir = output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    slice_files = _collect_slice_files(slices_dir, manifest_path)
+    if limit > 0:
+        slice_files = slice_files[:limit]
+    if not slice_files:
+        raise ValueError(f"no slice files found in {slices_dir}")
+
+    _ensure_seed_vc_path()
+    from inference import load_models
+
+    model_args = _build_args(
+        diffusion_steps=diffusion_steps,
+        length_adjust=length_adjust,
+        inference_cfg_rate=inference_cfg_rate,
+        auto_f0_adjust=auto_f0_adjust,
+        semi_tone_shift=semi_tone_shift,
+        fp16=fp16,
+    )
+    models = load_models(model_args)
+
+    total = len(slice_files)
+    ok = 0
+    for idx, source_path in enumerate(slice_files, start=1):
+        out_path = output_dir / source_path.name
+        if skip_existing and out_path.exists():
+            if on_progress:
+                on_progress(idx, total, f"skip existing: {out_path.name}")
+            ok += 1
+            continue
+
+        if on_progress:
+            on_progress(idx, total, f"converting {source_path.name}")
+        waveform, sr = _convert_audio(source_path, reference, models, model_args)
+        sf.write(str(out_path), waveform, sr, subtype="PCM_16")
+        ok += 1
+
+    return ok, total
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Batch convert vocal slices with Seed-VC")
     parser.add_argument("slices_dir", type=Path, help="Directory containing source vocal slices")
@@ -266,64 +337,44 @@ def main() -> int:
         print(f"Error: reference audio not found: {reference}", file=sys.stderr)
         return 1
 
+    output_dir = args.output.resolve() if args.output else ROOT / "output" / "converted" / slices_dir.name
+
     manifest = args.manifest.resolve() if args.manifest else slices_dir / "manifest.json"
     if not manifest.exists():
         manifest = None
 
-    output_dir = args.output.resolve() if args.output else ROOT / "output" / "converted" / slices_dir.name
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    slice_files = _collect_slice_files(slices_dir, manifest)
-    if args.limit > 0:
-        slice_files = slice_files[: args.limit]
-    if not slice_files:
-        print(f"Error: no slice files found in {slices_dir}", file=sys.stderr)
-        return 1
-
     print(f"Slices dir : {slices_dir}")
     print(f"Reference  : {reference}")
     print(f"Output dir : {output_dir}")
-    print(f"Total slices: {len(slice_files)}")
 
-    _ensure_seed_vc_path()
-    from inference import load_models
-
-    model_args = _build_args(
-        diffusion_steps=args.diffusion_steps,
-        length_adjust=args.length_adjust,
-        inference_cfg_rate=args.inference_cfg_rate,
-        auto_f0_adjust=args.auto_f0_adjust,
-        semi_tone_shift=args.semi_tone_shift,
-        fp16=args.fp16,
-    )
+    def _progress(idx: int, total: int, message: str) -> None:
+        print(f"[{idx}/{total}] {message} ...", flush=True)
 
     print("Loading Seed-VC models...")
     t0 = time.time()
-    models = load_models(model_args)
-    print(f"Models loaded in {time.time() - t0:.1f}s")
+    try:
+        ok, total = convert_slices(
+            slices_dir,
+            reference,
+            output_dir,
+            manifest=manifest,
+            diffusion_steps=args.diffusion_steps,
+            length_adjust=args.length_adjust,
+            inference_cfg_rate=args.inference_cfg_rate,
+            auto_f0_adjust=args.auto_f0_adjust,
+            semi_tone_shift=args.semi_tone_shift,
+            fp16=args.fp16,
+            limit=args.limit,
+            skip_existing=args.skip_existing,
+            on_progress=_progress,
+        )
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
-    ok = 0
-    for idx, source_path in enumerate(slice_files, start=1):
-        out_path = output_dir / source_path.name
-        if args.skip_existing and out_path.exists():
-            print(f"[{idx}/{len(slice_files)}] skip existing: {out_path.name}")
-            ok += 1
-            continue
-
-        print(f"[{idx}/{len(slice_files)}] converting {source_path.name} ...", flush=True)
-        start = time.time()
-        try:
-            waveform, sr = _convert_audio(source_path, reference, models, model_args)
-            sf.write(str(out_path), waveform, sr, subtype="PCM_16")
-            elapsed = time.time() - start
-            rtf = elapsed / (len(waveform) / sr) if len(waveform) else 0.0
-            print(f"  -> saved {out_path.name} ({elapsed:.1f}s, RTF={rtf:.2f})")
-            ok += 1
-        except Exception as exc:
-            print(f"  !! failed {source_path.name}: {exc}", file=sys.stderr)
-
-    print(f"Done: {ok}/{len(slice_files)} slices converted -> {output_dir}")
-    return 0 if ok == len(slice_files) else 1
+    print(f"Finished in {time.time() - t0:.1f}s")
+    print(f"Done: {ok}/{total} slices converted -> {output_dir}")
+    return 0 if ok == total else 1
 
 
 if __name__ == "__main__":

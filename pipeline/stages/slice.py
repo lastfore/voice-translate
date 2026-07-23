@@ -1,0 +1,84 @@
+"""Vocal slicing stage (VAD or LRC)."""
+
+from __future__ import annotations
+
+import importlib.util
+import sys
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+
+from pipeline import paths
+from pipeline.models import ProgressEvent, SliceMode, StageName
+
+
+@dataclass
+class SliceResult:
+    slices_dir: Path
+    manifest: Path
+    slice_count: int
+
+
+def _load_script_module(name: str, filename: str):
+    root = paths.get_root()
+    script_path = root / "scripts" / filename
+    if not script_path.is_file():
+        raise FileNotFoundError(f"script not found: {script_path}")
+    spec = importlib.util.spec_from_file_location(name, script_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def run_slice(
+    project_id: str,
+    vocals: Path,
+    output_dir: Path,
+    *,
+    mode: str = SliceMode.VAD.value,
+    lrc_path: Path | None = None,
+    on_progress: Callable[[ProgressEvent], None] | None = None,
+) -> SliceResult:
+    vocals = Path(vocals).resolve()
+    output_dir = Path(output_dir).resolve()
+    if not vocals.is_file():
+        raise FileNotFoundError(f"vocals not found: {vocals}")
+
+    job_id = f"slice-{project_id}"
+
+    def _emit(message: str, percent: float) -> None:
+        if on_progress:
+            on_progress(
+                ProgressEvent(
+                    project_id=project_id,
+                    stage=StageName.SLICE,
+                    job_id=job_id,
+                    percent=percent,
+                    message=message,
+                    log_line=message,
+                )
+            )
+
+    _emit("Starting slice", 0.0)
+
+    if mode == SliceMode.LRC.value:
+        if lrc_path is None:
+            raise ValueError("LRC mode requires lrc_path")
+        lrc_path = Path(lrc_path).resolve()
+        mod = _load_script_module("slice_vocals_lrc", "slice-vocals-lrc.py")
+        written, manifest_path, _meta = mod.slice_vocals_lrc(
+            lrc_path, vocals, output_dir, song_name=project_id
+        )
+    else:
+        mod = _load_script_module("slice_vocals", "slice-vocals.py")
+        written, manifest_path = mod.slice_vocals(vocals, output_dir)
+
+    count = len(written)
+    if count == 0:
+        raise RuntimeError("No slices were produced")
+
+    _emit(f"Wrote {count} slices", 100.0)
+    return SliceResult(slices_dir=output_dir, manifest=manifest_path, slice_count=count)
