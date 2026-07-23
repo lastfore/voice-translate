@@ -30,6 +30,7 @@
 | 推理输出目录 | `D:\code\voice-translate\output` |
 | 启动脚本 | `D:\code\voice-translate\scripts\start-seed-vc-webui.bat` |
 | 关闭脚本 | `D:\code\voice-translate\scripts\stop-seed-vc-webui.bat` |
+| 批量切片转换 | `D:\code\voice-translate\scripts\convert-slices.bat` |
 | uv 缓存（推荐） | `D:\uv-cache` |
 | 模型权重（自动下载） | `D:\code\voice-translate\seed-vc\checkpoints\` |
 | HF Hub 缓存（自动下载） | `D:\code\voice-translate\seed-vc\checkpoints\hf_cache\` |
@@ -440,6 +441,38 @@ python inference.py `
 | `--semi-tone-shift` | 0（按需 -12 ~ +12） | 0 |
 | 预计单首耗时 | 5–8 分钟 | 2–4 分钟 |
 | 预计显存占用 | ~6–7 GB | ~5–6 GB |
+
+### 5.4 批量切片转换
+
+适用于 [词曲分离与声乐切片安装指南](./词曲分离与声乐切片安装指南.md) 阶段 2 产出的 `output/slices/` 目录，批量调用 Seed-VC V1（`f0-condition`）逐片转换，输出至 `output/converted/<slices_dir.name>/`。
+
+**推荐（一键脚本）：**
+
+```powershell
+scripts\convert-slices.bat output\slices\test
+
+# 仅转换前 1 片（调试）
+scripts\convert-slices.bat output\slices\test --limit 1
+
+# 跳过已有输出
+scripts\convert-slices.bat output\slices\test --skip-existing
+```
+
+| 参数 | 说明 |
+| --- | --- |
+| `slices_dir` | 切片目录（必填，positional） |
+| `--reference` | 参考人声（默认 `seed-vc/examples/reference/dingzhen_0.wav`） |
+| `--output` | 输出目录（默认 `output/converted/<slices_dir.name>/`） |
+| `--manifest` | manifest 路径（默认 `<slices_dir>/manifest.json`） |
+| `--limit` | 仅转换前 N 片（0 = 全部） |
+| `--skip-existing` | 跳过已有输出文件 |
+
+| 脚本 | 说明 |
+| --- | --- |
+| `scripts/convert-slices.bat` | 批量切片转换（自动激活 seed-vc-env） |
+| `scripts/convert-slices.py` | 读取 slices + manifest，输出至 `output/converted/` |
+
+脚本会自动激活 `seed-vc-env` 并加载 Seed-VC 模型。转换完成后，使用 [人声伴奏结合安装指南](./人声伴奏结合安装指南.md) 中的 `merge-audio.bat` 重组混音。
 
 ---
 
