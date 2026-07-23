@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -46,7 +47,7 @@ def slice_vocals(
     min_speech_duration_ms: int = MIN_SPEECH_MS,
     min_silence_duration_ms: int = MIN_SILENCE_MS,
     speech_pad_ms: int = SPEECH_PAD_MS,
-) -> list[Path]:
+) -> tuple[list[Path], Path]:
     if not input_path.exists():
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
@@ -70,6 +71,7 @@ def slice_vocals(
 
     stem = input_path.stem
     written: list[Path] = []
+    manifest_slices: list[dict[str, object]] = []
 
     for index, ts in enumerate(timestamps):
         start = int(ts["start"] / 16000 * sr)
@@ -80,11 +82,35 @@ def slice_vocals(
             continue
 
         segment = apply_fade(audio[start:end], sr, FADE_IN_MS, FADE_OUT_MS)
-        out_path = output_dir / f"{stem}_slice_{index:03d}.flac"
+        out_name = f"{stem}_slice_{index:03d}.flac"
+        out_path = output_dir / out_name
         sf.write(str(out_path), segment, sr, subtype="PCM_16")
         written.append(out_path)
+        manifest_slices.append(
+            {
+                "id": f"slice_{index:03d}",
+                "file": out_name,
+                "start_ms": round(start / sr * 1000, 2),
+                "end_ms": round(end / sr * 1000, 2),
+            }
+        )
 
-    return written
+    try:
+        source = str(input_path.relative_to(ROOT))
+    except ValueError:
+        source = str(input_path)
+
+    manifest = {
+        "source": source,
+        "sample_rate": sr,
+        "fade_in_ms": FADE_IN_MS,
+        "fade_out_ms": FADE_OUT_MS,
+        "slices": manifest_slices,
+    }
+    manifest_path = output_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    return written, manifest_path
 
 
 def main() -> int:
@@ -100,7 +126,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        outputs = slice_vocals(args.input, args.output_dir)
+        outputs, manifest_path = slice_vocals(args.input, args.output_dir)
     except Exception as exc:  # noqa: BLE001 - CLI entrypoint
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -110,6 +136,7 @@ def main() -> int:
         return 0
 
     print(f"Wrote {len(outputs)} slices to {args.output_dir}")
+    print(f"Wrote manifest: {manifest_path}")
     for path in outputs:
         print(path)
     return 0
