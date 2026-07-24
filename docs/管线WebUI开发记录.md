@@ -269,3 +269,38 @@ py -m pytest tests/ -q
 - [ ] 向导 Tab 一键全流程
 - [ ] 现有 CLI 脚本独立可用性复测
 
+---
+
+## converted 产物目录改造与合并修复
+
+**状态：** ✅ 已完成  
+**完成日期：** 2026-07-24  
+**设计文档：** [converted产物目录改造与合并修复方案.md](./converted产物目录改造与合并修复方案.md)
+
+### 目标
+
+- `output/converted/{id}/` 拆分为 `full/`（整轨）与 `slices/`（批量切片）
+- 修复 `balanced` profile 下部分转换 + 原始切片回退时的长度对齐（broadcast）错误
+- 保留旧式扁平目录的 fallback 解析
+
+### 交付物
+
+| 文件 | 说明 |
+|------|------|
+| `pipeline/paths.py` | `converted_full_dir`、`converted_slices_dir`、`resolve_*`、`has_converted_artifacts` |
+| `scripts/merge-audio.py` | `_align_segment_to_reference`、`_resolve_vocals_input` |
+| `pipeline/stages/convert.py` | 整轨写入 `full/full.flac`，批量写入 `slices/` |
+| `pipeline/store.py` | 合并输入解析与 `scan_and_repair` 适配新布局 |
+| `scripts/migrate-converted-layout.py` | 可选迁移脚本（扁平 → 子目录） |
+| `tests/test_paths.py` | 新布局 + legacy fallback 测试 |
+| `tests/test_merge_partial.py` | 长度不一致 + balanced profile 测试 |
+
+### 测试
+
+```powershell
+py -m pytest tests/test_paths.py tests/test_merge_partial.py -q
+separator-env\Scripts\python.exe tests/run_phase2_mysong.py
+```
+
+**结果：** 单元测试通过；Phase 2 mysong D1/D2/E1/E2 全部 PASS（2026-07-24）
+

@@ -49,9 +49,6 @@ def run_convert(
 
     root = paths.get_root()
     job_id = f"convert-{project_id}"
-    out_dir = output_dir or paths.converted_dir(project_id)
-    out_dir = Path(out_dir).resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
 
     def _emit(message: str, percent: float, log_line: str | None = None) -> None:
         if on_progress:
@@ -117,13 +114,16 @@ def run_convert(
         _emit("Full track conversion complete", 100.0)
         return ConvertResult(
             mode=mode,
-            converted_dir=dest.parent,
+            converted_dir=paths.converted_dir(project_id),
             full_track=dest,
             converted_count=1,
             total_count=1,
         )
 
     # slice_batch via subprocess CLI
+    out_dir = Path(output_dir) if output_dir else paths.converted_slices_dir(project_id)
+    out_dir = out_dir.resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
     sdir = Path(slices_dir).resolve() if slices_dir else paths.slices_dir(project_id)
     if not sdir.is_dir():
         raise FileNotFoundError(f"slices_dir not found: {sdir}")

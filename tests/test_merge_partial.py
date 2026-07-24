@@ -167,3 +167,46 @@ def test_build_vocal_track_whole_file_ignores_manifest(tmp_path: Path, merge_mod
 
     assert timeline.shape[0] == 4410
     assert np.allclose(timeline, 0.5, atol=0.05)
+
+
+def test_build_from_slices_length_mismatch_balanced(tmp_path: Path, merge_mod) -> None:
+    """balanced profile must pad/trim segments before mask/RMS when lengths differ."""
+    slices_dir = tmp_path / "slices"
+    converted_dir = tmp_path / "converted"
+    slices_dir.mkdir()
+    converted_dir.mkdir()
+
+    name = "part_slice_000.wav"
+    _write_wav(slices_dir / name, np.linspace(-0.1, 0.1, 4410, dtype=np.float32))
+    _write_wav(converted_dir / name, np.linspace(0.0, 0.2, 4500, dtype=np.float32))
+
+    manifest_path = slices_dir / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "fade_in_ms": 8,
+                "fade_out_ms": 15,
+                "slices": [
+                    {
+                        "id": "slice_000",
+                        "file": name,
+                        "start_ms": 0,
+                        "end_ms": 1000,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    profile = merge_mod.PROFILES["balanced"]
+    timeline = merge_mod.build_from_slices(
+        manifest_path,
+        converted_dir,
+        slices_dir,
+        profile,
+        original_vocals=None,
+    )
+
+    assert timeline.shape[0] > 0
+    assert np.any(timeline != 0)

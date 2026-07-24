@@ -306,16 +306,20 @@ class ProjectStore:
             rec.artifacts = {k: v for k, v in rec.artifacts.items() if v}
 
         cdir = paths.converted_dir(pid)
-        if cdir.is_dir() and _dir_has_audio(cdir):
+        full = paths.resolve_converted_full_track(pid)
+        slices = paths.resolve_converted_slices_dir(pid)
+        if full or slices:
             rec = project.stages[StageName.CONVERT]
             if rec.status == StageStatus.NOT_RUN:
                 rec.status = StageStatus.DONE
-            full = paths.converted_full_track_path(pid)
-            rec.artifacts = {
-                "converted_dir": rel_path(cdir, self.root),
-                "full_track": rel_path(full, self.root) if full.is_file() else None,
-            }
-            rec.artifacts = {k: v for k, v in rec.artifacts.items() if v}
+            artifacts: dict[str, str | None] = {}
+            if slices:
+                artifacts["converted_dir"] = rel_path(slices, self.root)
+            elif cdir.is_dir() and _dir_has_audio(cdir):
+                artifacts["converted_dir"] = rel_path(cdir, self.root)
+            if full:
+                artifacts["full_track"] = rel_path(full, self.root)
+            rec.artifacts = {k: v for k, v in artifacts.items() if v}
 
         mdir = paths.merged_dir(pid)
         mixed = mdir / "mixed.flac"
@@ -480,7 +484,7 @@ class ProjectStore:
                     manifest = paths.slices_manifest_path(pid)
                     if manifest.is_file():
                         resolved["manifest"] = rel_path(manifest, self.root)
-                resolved.setdefault("output_dir", rel_path(paths.converted_dir(pid), self.root))
+                resolved.setdefault("output_dir", rel_path(paths.converted_slices_dir(pid), self.root))
 
         elif stage == StageName.MERGE:
             merge_mode = overrides.get("merge_mode", "whole_track") if overrides else "whole_track"
@@ -499,15 +503,21 @@ class ProjectStore:
                         break
                 if not resolved.get("vocals"):
                     if merge_mode == "slice_stitch":
-                        if paths.converted_dir(pid).is_dir() and _dir_has_audio(paths.converted_dir(pid)):
-                            resolved["vocals"] = rel_path(paths.converted_dir(pid), self.root)
-                        elif paths.converted_full_track_path(pid).is_file():
-                            resolved["vocals"] = rel_path(paths.converted_full_track_path(pid), self.root)
+                        slices = paths.resolve_converted_slices_dir(pid)
+                        if slices:
+                            resolved["vocals"] = rel_path(slices, self.root)
+                        else:
+                            full = paths.resolve_converted_full_track(pid)
+                            if full:
+                                resolved["vocals"] = rel_path(full, self.root)
                     else:
-                        if paths.converted_full_track_path(pid).is_file():
-                            resolved["vocals"] = rel_path(paths.converted_full_track_path(pid), self.root)
-                        elif paths.converted_dir(pid).is_dir() and _dir_has_audio(paths.converted_dir(pid)):
-                            resolved["vocals"] = rel_path(paths.converted_dir(pid), self.root)
+                        full = paths.resolve_converted_full_track(pid)
+                        if full:
+                            resolved["vocals"] = rel_path(full, self.root)
+                        else:
+                            slices = paths.resolve_converted_slices_dir(pid)
+                            if slices:
+                                resolved["vocals"] = rel_path(slices, self.root)
             if not resolved.get("instrumental"):
                 art_inst = project.stages[StageName.SEPARATE].artifacts.get("instrumental")
                 if art_inst and _path_exists(art_inst, self.root):
@@ -546,7 +556,7 @@ class ProjectStore:
         has_input = bool(project.input_audio and _path_exists(project.input_audio, self.root))
         has_sep = bool(paths.separated_vocals_path(project_id))
         has_slices = paths.slices_dir(project_id).is_dir() and _dir_has_audio(paths.slices_dir(project_id))
-        has_convert = paths.converted_dir(project_id).is_dir() and _dir_has_audio(paths.converted_dir(project_id))
+        has_convert = paths.has_converted_artifacts(project_id)
         has_merge = paths.has_per_project_merged(project_id) or (
             paths.legacy_flat_merged_mixed().is_file()
             and self._legacy_merge_eligible(project_id, {p.id for p in self.list_projects()} | {project_id})

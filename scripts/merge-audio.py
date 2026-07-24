@@ -216,6 +216,29 @@ def build_from_whole_track(
     return vocals.astype(np.float32)
 
 
+def _align_segment_to_reference(
+    segment: np.ndarray,
+    reference_segment: np.ndarray | None,
+    profile: Profile,
+    manifest_target_len: int = 0,
+) -> np.ndarray:
+    """Match segment length to reference before mask/RMS; pad/trim when time_align is off."""
+    if reference_segment is not None:
+        target_len = len(reference_segment)
+    elif manifest_target_len > 0:
+        target_len = manifest_target_len
+    else:
+        return segment
+
+    if len(segment) == target_len:
+        return segment
+    if profile.time_align:
+        return stretch_to_length(segment, TARGET_SR, target_len)
+    if len(segment) > target_len:
+        return segment[:target_len]
+    return np.pad(segment, (0, target_len - len(segment)))
+
+
 def build_from_slices(
     manifest_path: Path,
     converted_dir: Path,
@@ -263,14 +286,10 @@ def build_from_slices(
             orig_audio, orig_sr = load_audio(original_slice_path)
             reference_segment = to_mono(resample_audio(orig_audio, orig_sr, TARGET_SR))
 
-        target_len = int((item["end_ms"] - item["start_ms"]) * TARGET_SR / 1000)
-        if reference_segment is not None:
-            target_len = len(reference_segment)
-
-        if profile.time_align and reference_segment is not None:
-            segment = stretch_to_length(segment, TARGET_SR, len(reference_segment))
-        elif target_len > 0 and len(segment) != target_len and profile.time_align:
-            segment = stretch_to_length(segment, TARGET_SR, target_len)
+        manifest_target_len = int((item["end_ms"] - item["start_ms"]) * TARGET_SR / 1000)
+        segment = _align_segment_to_reference(
+            segment, reference_segment, profile, manifest_target_len
+        )
 
         if profile.silence_mask and reference_segment is not None:
             segment *= build_silence_mask(reference_segment, TARGET_SR)
@@ -289,6 +308,19 @@ def build_from_slices(
     return timeline.astype(np.float32)
 
 
+def _resolve_vocals_input(vocals: Path, profile: Profile) -> Path:
+    """Map project converted root to full/ or slices/ when using the new layout."""
+    if not vocals.is_dir():
+        return vocals
+    slices_sub = vocals / "slices"
+    full_file = vocals / "full" / "full.flac"
+    if profile.stitch_slices and slices_sub.is_dir():
+        return slices_sub
+    if full_file.is_file():
+        return full_file
+    return vocals
+
+
 def build_vocal_track(
     vocals: Path,
     profile: Profile,
@@ -296,6 +328,7 @@ def build_vocal_track(
     original_vocals: Path | None,
     slices_dir: Path | None,
 ) -> np.ndarray:
+    vocals = _resolve_vocals_input(vocals, profile)
     manifest_path = resolve_manifest(vocals, manifest)
     # Slice stitching only applies when --vocals points at a converted slices directory.
     # A single whole-track file (e.g. full.flac) must not fall back to manifest stitching

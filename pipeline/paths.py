@@ -116,8 +116,74 @@ def converted_dir(project_id: str) -> Path:
     return output_dir() / "converted" / project_id
 
 
+def converted_full_dir(project_id: str) -> Path:
+    return converted_dir(project_id) / "full"
+
+
+def converted_slices_dir(project_id: str) -> Path:
+    return converted_dir(project_id) / "slices"
+
+
+_AUDIO_EXTS = {".flac", ".wav", ".mp3", ".ogg"}
+
+
+def _is_audio_file(path: Path) -> bool:
+    return path.is_file() and path.suffix.lower() in _AUDIO_EXTS
+
+
+def _dir_has_audio(directory: Path) -> bool:
+    if not directory.is_dir():
+        return False
+    return any(_is_audio_file(p) for p in directory.iterdir())
+
+
+def _dir_has_slice_flacs(directory: Path) -> bool:
+    """True when directory holds per-slice audio (legacy flat or slices/)."""
+    if not directory.is_dir():
+        return False
+    for path in directory.iterdir():
+        if not _is_audio_file(path):
+            continue
+        if path.name.lower() == "full.flac":
+            continue
+        if "slice" in path.name.lower():
+            return True
+    return False
+
+
 def converted_full_track_path(project_id: str) -> Path:
+    """Canonical write path for whole-track conversion (new layout)."""
+    return converted_full_dir(project_id) / "full.flac"
+
+
+def converted_legacy_full_track_path(project_id: str) -> Path:
     return converted_dir(project_id) / "full.flac"
+
+
+def resolve_converted_full_track(project_id: str) -> Path | None:
+    """New layout ``full/full.flac``, then legacy ``full.flac`` at project root."""
+    new = converted_full_track_path(project_id)
+    if new.is_file():
+        return new
+    legacy = converted_legacy_full_track_path(project_id)
+    return legacy if legacy.is_file() else None
+
+
+def resolve_converted_slices_dir(project_id: str) -> Path | None:
+    """New layout ``slices/``, then legacy flat directory with slice files."""
+    new = converted_slices_dir(project_id)
+    if new.is_dir() and _dir_has_audio(new):
+        return new
+    legacy = converted_dir(project_id)
+    if legacy.is_dir() and _dir_has_slice_flacs(legacy):
+        return legacy
+    return None
+
+
+def has_converted_artifacts(project_id: str) -> bool:
+    return resolve_converted_full_track(project_id) is not None or resolve_converted_slices_dir(
+        project_id
+    ) is not None
 
 
 def merged_dir(project_id: str) -> Path:

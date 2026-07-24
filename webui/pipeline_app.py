@@ -126,7 +126,8 @@ def _project_field_updates(pid: str | None, *panels: StageParamPanel) -> list:
 
     inst_p = paths.separated_instrumental_path(pid) if pid else None
 
-    full_p = paths.converted_full_track_path(pid) if pid else None
+    full_p = paths.resolve_converted_full_track(pid) if pid else None
+    slices_p = paths.resolve_converted_slices_dir(pid) if pid else None
 
     mixed_p = str(paths.merged_dir(pid) / "mixed.flac") if pid else None
 
@@ -462,7 +463,7 @@ def build_app() -> gr.Blocks:
 
                                     file_types=[".flac", ".wav", ".mp3", ".ogg", ".m4a"],
 
-                                    placeholder="例如 output/converted/{项目}/full.flac",
+                                    placeholder="例如 output/converted/{项目}/full/full.flac",
 
                                 )
 
@@ -478,7 +479,7 @@ def build_app() -> gr.Blocks:
 
                                     directory=True,
 
-                                    placeholder="例如 output/converted/{项目}/",
+                                    placeholder="例如 output/converted/{项目}/slices/",
 
                                 )
 

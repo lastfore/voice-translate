@@ -57,15 +57,18 @@ def main() -> int:
     results: list[tuple[str, bool, str]] = []
 
     root = paths.get_root()
-    full = paths.converted_full_track_path(PID)
+    full = paths.resolve_converted_full_track(PID)
     inst = paths.separated_instrumental_path(PID)
-    converted_dir = paths.converted_dir(PID)
+    converted_slices = paths.resolve_converted_slices_dir(PID)
 
-    if not full.is_file():
-        print(f"SKIP: missing {full}")
+    if not full or not full.is_file():
+        print(f"SKIP: missing full track for {PID}")
         return 1
     if not inst or not inst.is_file():
         print(f"SKIP: missing instrumental for {PID}")
+        return 1
+    if not converted_slices:
+        print(f"SKIP: missing converted slices dir for {PID}")
         return 1
 
     ok, _logs, stderr, _err = run_merge_capture_stderr(
@@ -89,7 +92,7 @@ def main() -> int:
     ok, _logs, stderr, err = run_merge_capture_stderr(
         runner,
         {
-            "vocals": str(converted_dir.relative_to(root)),
+            "vocals": str(converted_slices.relative_to(root)),
             "instrumental": str(inst.relative_to(root)),
             "merge_mode": "slice_stitch",
             "profile": "balanced",
@@ -97,7 +100,7 @@ def main() -> int:
     )
     d2_ok = ok and ("Slice merge:" in stderr or "converted slice missing" in stderr)
     d2_detail = f"success={ok}; error={err}; stderr_tail={stderr.strip()[-200:]}"
-    results.append(("D2 slice_stitch + converted dir", d2_ok, d2_detail))
+    results.append(("D2 slice_stitch + converted/slices", d2_ok, d2_detail))
 
     values = default_stage_params(StageName.CONVERT.value)
     values["limit"] = 3

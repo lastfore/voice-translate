@@ -56,4 +56,29 @@ def test_project_meta_path(root: Path) -> None:
 def test_slices_and_converted_dirs(root: Path) -> None:
     assert paths.slices_dir("abc") == root / "output" / "slices" / "abc"
     assert paths.converted_dir("abc") == root / "output" / "converted" / "abc"
+    assert paths.converted_full_dir("abc") == root / "output" / "converted" / "abc" / "full"
+    assert paths.converted_slices_dir("abc") == root / "output" / "converted" / "abc" / "slices"
+    assert paths.converted_full_track_path("abc") == root / "output" / "converted" / "abc" / "full" / "full.flac"
     assert paths.merged_dir("abc") == root / "output" / "merged" / "abc"
+
+
+def test_resolve_converted_layout_new_and_legacy(root: Path) -> None:
+    base = root / "output" / "converted" / "demo"
+    (base / "full").mkdir(parents=True)
+    (base / "full" / "full.flac").write_bytes(b"x")
+    (base / "slices").mkdir()
+    (base / "slices" / "song_slice_000.flac").write_bytes(b"x")
+
+    assert paths.resolve_converted_full_track("demo") == base / "full" / "full.flac"
+    assert paths.resolve_converted_slices_dir("demo") == base / "slices"
+    assert paths.has_converted_artifacts("demo")
+
+
+def test_resolve_converted_layout_legacy_flat(root: Path) -> None:
+    base = root / "output" / "converted" / "legacy"
+    base.mkdir(parents=True)
+    (base / "full.flac").write_bytes(b"x")
+    (base / "song_slice_000.flac").write_bytes(b"x")
+
+    assert paths.resolve_converted_full_track("legacy") == base / "full.flac"
+    assert paths.resolve_converted_slices_dir("legacy") == base

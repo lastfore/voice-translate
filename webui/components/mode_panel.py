@@ -23,13 +23,12 @@ SLICE_MODES = [SLICE_VAD, SLICE_LRC]
 SLICE_TAB_LABELS = ["VAD 断句", "LRC 歌词断句"]
 
 MERGE_WHOLE_HELP = (
-    "适用于转换阶段使用 **整轨快捷** 模式，产物为 `output/converted/{项目}/full.flac`。"
+    "适用于转换阶段使用 **整轨快捷** 模式，产物为 `output/converted/{项目}/full/full.flac`。"
     " 请选择单个音频文件作为人声输入。"
 )
 MERGE_SLICE_HELP = (
     "适用于 **切片 → 批量转换** 流程。系统读取 `output/slices/{项目}/manifest.json`，"
-    "将 `output/converted/{项目}/` 下各切片按时间轴拼接；"
-    "缺失的转换切片会回退到原始切片（日志中有 Warning）。"
+    " 在 `output/converted/{项目}/slices/` 中查找转换切片；缺失项回退到原始切片。"
 )
 
 
