@@ -23,6 +23,7 @@ from pipeline.models import (
     utc_now_iso,
 )
 from pipeline.queue import GpuJobQueue, JobResult
+from pipeline.stage_params import params_for_stage
 from pipeline.stages.convert import run_convert
 from pipeline.stages.merge import run_merge
 from pipeline.stages.separate import run_separate
@@ -203,9 +204,10 @@ class StageRunner:
 
         if stage == StageName.SLICE:
             vocals = _abs("vocals")
-            out_dir = _abs("output_dir") or paths.slices_dir(project_id)
-            assert vocals is not None
             mode = inputs.get("mode") or params.get("mode", SliceMode.VAD.value)
+            slice_mode = paths.normalize_slice_mode(mode)
+            out_dir = _abs("output_dir") or paths.slices_mode_dir(project_id, slice_mode)
+            assert vocals is not None
             result = run_slice(
                 project_id,
                 vocals,
@@ -218,13 +220,19 @@ class StageRunner:
                 speech_pad_ms=int(params.get("speech_pad_ms", 80)),
                 on_progress=on_progress,
             )
+            mode_art = {
+                "slices_dir": rel_path(result.slices_dir, root),
+                "manifest": rel_path(result.manifest, root),
+            }
             return {
                 "artifacts": {
+                    slice_mode: mode_art,
                     "slices_dir": rel_path(result.slices_dir, root),
                     "manifest": rel_path(result.manifest, root),
                 },
                 "params": {
                     "mode": mode,
+                    "active_slice_mode": slice_mode,
                     "slice_count": result.slice_count,
                     **{
                         k: params[k]
@@ -241,6 +249,12 @@ class StageRunner:
 
         if stage == StageName.CONVERT:
             mode = inputs.get("mode") or params.get("mode", ConvertMode.SLICE_BATCH.value)
+            slice_mode = paths.normalize_slice_mode(
+                inputs.get("slice_mode") or params.get("active_slice_mode") or params.get("slice_mode")
+            )
+            slice_ids = params.get("slice_ids")
+            if isinstance(slice_ids, str):
+                slice_ids = [part.strip() for part in slice_ids.split(",") if part.strip()]
             reference = _abs("reference")
             assert reference is not None
             result = run_convert(
@@ -252,6 +266,7 @@ class StageRunner:
                 manifest=_abs("manifest"),
                 output_dir=_abs("output_dir"),
                 output_path=_abs("output_path"),
+                slice_mode=slice_mode,
                 diffusion_steps=int(params.get("diffusion_steps", 40)),
                 length_adjust=float(params.get("length_adjust", 1.0)),
                 inference_cfg_rate=float(params.get("inference_cfg_rate", 0.7)),
@@ -260,20 +275,27 @@ class StageRunner:
                 fp16=bool(params.get("fp16", True)),
                 skip_existing=bool(params.get("skip_existing", True)),
                 limit=int(params.get("limit", 0)),
+                slice_ids=slice_ids,
+                overrides_path=_abs("overrides_path"),
                 on_progress=on_progress,
             )
-            artifacts: dict[str, Any] = {
-                "converted_dir": rel_path(result.converted_dir, root),
-            }
+            artifacts: dict[str, Any] = {}
+            if mode == ConvertMode.SLICE_BATCH.value:
+                mode_art = {"converted_dir": rel_path(result.converted_dir, root)}
+                artifacts[slice_mode] = mode_art
+                artifacts["converted_dir"] = rel_path(result.converted_dir, root)
             if result.full_track:
                 artifacts["full_track"] = rel_path(result.full_track, root)
+            convert_param_keys = [p.key for p in params_for_stage(StageName.CONVERT.value)]
             return {
                 "artifacts": artifacts,
                 "params": {
                     "mode": mode,
+                    "active_slice_mode": slice_mode,
                     "converted_count": result.converted_count,
                     "total_count": result.total_count,
-                    **{k: params[k] for k in ("diffusion_steps", "reference") if k in params},
+                    **{k: params[k] for k in convert_param_keys if k in params},
+                    **({k: params[k] for k in ("reference",) if k in params}),
                 },
             }
 
@@ -282,16 +304,20 @@ class StageRunner:
             instrumental = _abs("instrumental")
             assert vocals is not None and instrumental is not None
             profile = params.get("profile") or params.get("merge_profile", "full")
+            slice_mode = paths.normalize_slice_mode(
+                inputs.get("slice_mode") or params.get("active_slice_mode") or params.get("slice_mode")
+            )
             manifest = _abs("manifest")
             slices_dir = _abs("slices_dir")
             if vocals.is_file():
                 manifest = None
                 slices_dir = None
+            merge_out = _abs("output_dir") or paths.merged_mode_dir(project_id, slice_mode)
             result = run_merge(
                 project_id,
                 vocals,
                 instrumental,
-                _abs("output_dir") or paths.merged_dir(project_id),
+                merge_out,
                 profile=profile,
                 reference=_abs("reference"),
                 original_vocals=_abs("original_vocals"),
@@ -307,12 +333,18 @@ class StageRunner:
             )
             return {
                 "artifacts": {
+                    slice_mode: {
+                        "merged_dir": rel_path(result.merged_dir, root),
+                        "vocals": rel_path(result.vocals, root),
+                        "mixed": rel_path(result.mixed, root),
+                    },
                     "merged_dir": rel_path(result.merged_dir, root),
                     "vocals": rel_path(result.vocals, root),
                     "mixed": rel_path(result.mixed, root),
                 },
                 "params": {
                     "profile": profile,
+                    "active_slice_mode": slice_mode,
                     **{
                         k: params[k]
                         for k in (

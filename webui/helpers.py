@@ -105,6 +105,33 @@ def save_reference_audio(project_id: str, upload_path: str | None) -> str | None
     return str(saved) if saved else None
 
 
+def count_manifest_slices(manifest_path: str | Path | None) -> int:
+    p = abs_path(str(manifest_path)) if manifest_path else None
+    if p is None or not p.is_file():
+        return 0
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return len(data.get("slices") or [])
+    except (json.JSONDecodeError, OSError):
+        return 0
+
+
+def format_slice_mode_status(project_id: str) -> str:
+    """Summarize LRC/VAD slice trees for sidebar display."""
+    parts: list[str] = []
+    for mode in paths.SLICE_MODES:
+        mode_dir = paths.resolve_slices_mode_dir(project_id, mode)
+        if not mode_dir:
+            parts.append(f"{mode.upper()}: —")
+            continue
+        manifest = mode_dir / "manifest.json"
+        count = count_manifest_slices(manifest)
+        converted = paths.resolve_converted_mode_dir(project_id, mode)
+        conv_mark = "✓" if converted else "○"
+        parts.append(f"{mode.upper()}: {count}片 {conv_mark}")
+    return "  ".join(parts)
+
+
 def read_manifest_preview(manifest_path: str | None, max_rows: int = 8) -> str:
     p = abs_path(manifest_path)
     if p is None or not p.is_file():

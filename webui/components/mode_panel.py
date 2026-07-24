@@ -27,8 +27,8 @@ MERGE_WHOLE_HELP = (
     " 请选择单个音频文件作为人声输入。"
 )
 MERGE_SLICE_HELP = (
-    "适用于 **切片 → 批量转换** 流程。系统读取 `output/slices/{项目}/manifest.json`，"
-    " 在 `output/converted/{项目}/slices/` 中查找转换切片；缺失项回退到原始切片。"
+    "适用于 **切片 → 批量转换** 流程。系统读取 `output/slices/{项目}/{lrc|vad}/manifest.json`，"
+    " 在 `output/converted/{项目}/{lrc|vad}/` 中查找转换切片；缺失项回退到原始切片。"
 )
 
 

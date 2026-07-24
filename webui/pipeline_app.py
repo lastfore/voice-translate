@@ -74,6 +74,8 @@ from webui.components.path_input import PathInput
 
 from webui.components.project_sidebar import build_sidebar, wire_sidebar
 
+from webui.components.slice_tuner import build_slice_tuner, wire_slice_tuner
+
 from webui.components.stage_params import StageParamPanel, build_stage_param_panel
 
 from webui.components.wizard import build_wizard, wizard_defaults_updates
@@ -127,17 +129,27 @@ def _project_field_updates(pid: str | None, *panels: StageParamPanel) -> list:
     inst_p = paths.separated_instrumental_path(pid) if pid else None
 
     full_p = paths.resolve_converted_full_track(pid) if pid else None
-    slices_p = paths.resolve_converted_slices_dir(pid) if pid else None
-
-    mixed_p = str(paths.merged_dir(pid) / "mixed.flac") if pid else None
+    slice_mode = d.get("slice_mode", SLICE_VAD)
+    slices_p = (
+        paths.resolve_converted_mode_dir(pid, slice_mode) or paths.resolve_converted_slices_dir(pid)
+        if pid
+        else None
+    )
+    mixed_mode_path = paths.merged_mixed_path(pid, slice_mode) if pid else None
+    legacy_mixed = paths.merged_dir(pid) / "mixed.flac" if pid else None
+    mixed_p = str(
+        mixed_mode_path
+        if mixed_mode_path and mixed_mode_path.is_file()
+        else legacy_mixed
+        if legacy_mixed and legacy_mixed.is_file()
+        else mixed_mode_path or legacy_mixed
+    )
 
     manifest_preview = read_manifest_preview(d.get("manifest", ""))
 
     convert_mode = d.get("convert_mode", CONVERT_BATCH)
 
     slice_mode = d.get("slice_mode", SLICE_VAD)
-
-
 
     base = [
 
@@ -391,19 +403,13 @@ def build_app() -> gr.Blocks:
 
                                 )
 
-                                convert_sdir_input = PathInput.build("切片目录", directory=True)
+                                convert_sdir_input = PathInput.build(
+                                    "切片目录",
+                                    directory=True,
+                                    placeholder="例如 output/slices/{项目}/{lrc|vad}/",
+                                )
 
                                 convert_sdir = convert_sdir_input.text
-
-                                convert_batch_params = build_stage_param_panel(
-
-                                    StageName.CONVERT,
-
-                                    slice_batch_only=True,
-
-                                    accordion_label="批量模式参数",
-
-                                )
 
                             with gr.Tab("整轨快捷", id="convert_full") as convert_full_tab:
 
@@ -419,14 +425,14 @@ def build_app() -> gr.Blocks:
 
                                 convert_source = convert_source_input.text
 
+                            with gr.Tab("切片精修", id="convert_tune") as convert_tune_tab:
+                                slice_tuner = build_slice_tuner()
+
                         convert_ref = gr.Audio(label="参考音频", type="filepath")
 
                         convert_params = build_stage_param_panel(
-
                             StageName.CONVERT,
-
-                            slice_batch_only=False,
-
+                            accordion_label="转换参数",
                         )
 
                         convert_run = gr.Button("运行转换", variant="primary")
@@ -479,7 +485,7 @@ def build_app() -> gr.Blocks:
 
                                     directory=True,
 
-                                    placeholder="例如 output/converted/{项目}/slices/",
+                                    placeholder="例如 output/converted/{项目}/{lrc|vad}/",
 
                                 )
 
@@ -579,6 +585,8 @@ def build_app() -> gr.Blocks:
 
         )
 
+        wire_slice_tuner(slice_tuner, project_state, slice_mode)
+
         wire_mode_tabs(
 
             [(merge_whole_tab, MERGE_WHOLE), (merge_slice_tab, MERGE_SLICE)],
@@ -596,8 +604,6 @@ def build_app() -> gr.Blocks:
             sep_params,
 
             slice_vad_params,
-
-            convert_batch_params,
 
             convert_params,
 
@@ -660,8 +666,6 @@ def build_app() -> gr.Blocks:
             *sep_params.input_components(),
 
             *slice_vad_params.input_components(),
-
-            *convert_batch_params.input_components(),
 
             *convert_params.input_components(),
 
@@ -767,17 +771,11 @@ def build_app() -> gr.Blocks:
 
 
 
-        def run_convert(pid, mode, source, sdir, ref, *param_values):
+        def run_convert(pid, mode, source, sdir, ref, slice_mode_val, *param_values):
 
             reference = save_reference_audio(pid, ref) if pid and ref else ref
 
-            batch_count = len(convert_batch_params.keys)
-
-            batch_values = convert_batch_params.values_to_dict(*param_values[:batch_count])
-
-            common_values = convert_params.values_to_dict(*param_values[batch_count:])
-
-            all_values = {**batch_values, **common_values}
+            all_values = convert_params.values_to_dict(*param_values)
 
             if mode == CONVERT_FULL:
 
@@ -785,7 +783,13 @@ def build_app() -> gr.Blocks:
 
             else:
 
-                params = {"mode": mode, "slices_dir": sdir, "reference": reference}
+                params = {
+                    "mode": mode,
+                    "slices_dir": sdir,
+                    "reference": reference,
+                    "slice_mode": slice_mode_val,
+                    "active_slice_mode": slice_mode_val,
+                }
 
             params.update(
 
@@ -793,9 +797,16 @@ def build_app() -> gr.Blocks:
 
             )
 
+            slice_mode = params.get("active_slice_mode") or slice_mode_val or ""
             config_line = (
-                f"[配置] skip_existing={params.get('skip_existing')}, "
-                f"fp16={params.get('fp16')}, auto_f0_adjust={params.get('auto_f0_adjust')}"
+                f"[配置] mode={params.get('mode')} slice_mode={slice_mode or '-'} "
+                f"diffusion_steps={params.get('diffusion_steps')} "
+                f"semi_tone_shift={params.get('semi_tone_shift')} "
+                f"inference_cfg_rate={params.get('inference_cfg_rate')} "
+                f"length_adjust={params.get('length_adjust')} "
+                f"skip_existing={params.get('skip_existing')} "
+                f"fp16={params.get('fp16')} auto_f0_adjust={params.get('auto_f0_adjust')} "
+                f"limit={params.get('limit')}"
             )
 
             yield config_line, "运行中..."
@@ -820,7 +831,7 @@ def build_app() -> gr.Blocks:
 
                 convert_ref,
 
-                *convert_batch_params.input_components(),
+                slice_mode,
 
                 *convert_params.input_components(),
 

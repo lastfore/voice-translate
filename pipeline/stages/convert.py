@@ -41,6 +41,9 @@ def run_convert(
     fp16: bool = True,
     skip_existing: bool = True,
     limit: int = 0,
+    slice_mode: str = "lrc",
+    slice_ids: list[str] | None = None,
+    overrides_path: Path | None = None,
     on_progress: Callable[[ProgressEvent], None] | None = None,
 ) -> ConvertResult:
     reference = Path(reference).resolve()
@@ -121,14 +124,18 @@ def run_convert(
         )
 
     # slice_batch via subprocess CLI
-    out_dir = Path(output_dir) if output_dir else paths.converted_slices_dir(project_id)
+    smode = paths.normalize_slice_mode(slice_mode)
+    out_dir = Path(output_dir) if output_dir else paths.converted_mode_dir(project_id, smode)
     out_dir = out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    sdir = Path(slices_dir).resolve() if slices_dir else paths.slices_dir(project_id)
+    sdir = Path(slices_dir).resolve() if slices_dir else paths.resolve_slices_mode_dir(project_id, smode)
+    if sdir is None:
+        sdir = paths.slices_dir(project_id)
+    sdir = sdir.resolve()
     if not sdir.is_dir():
         raise FileNotFoundError(f"slices_dir not found: {sdir}")
 
-    manifest_path = Path(manifest).resolve() if manifest else paths.slices_manifest_path(project_id)
+    manifest_path = Path(manifest).resolve() if manifest else paths.slices_manifest_path(project_id, smode)
     if not manifest_path.is_file():
         manifest_path = None
 
@@ -161,8 +168,15 @@ def run_convert(
         cmd.append("--no-fp16")
     if skip_existing:
         cmd.append("--skip-existing")
+    else:
+        cmd.append("--force")
     if limit > 0:
         cmd.extend(["--limit", str(limit)])
+    if slice_ids:
+        cmd.extend(["--slice-ids", ",".join(slice_ids)])
+    overrides_file = overrides_path or paths.slices_overrides_path(project_id, smode)
+    if overrides_file.is_file():
+        cmd.extend(["--overrides", str(overrides_file.resolve())])
 
     converted = 0
     total = 0

@@ -14,7 +14,7 @@ from pipeline.stage_params import collect_params, merge_stage_params, merge_wiza
 from pipeline.queue import GpuJobQueue
 from pipeline.runner import StageRunner
 from pipeline.store import ProjectStore
-from webui.helpers import split_vocals_paths
+from webui.helpers import format_slice_mode_status, split_vocals_paths
 
 _store = ProjectStore()
 _gpu_queue = GpuJobQueue()
@@ -114,15 +114,36 @@ def load_project_defaults(project_id: str | None) -> dict[str, Any]:
     cv = project.stages[StageName.CONVERT]
     mg = project.stages[StageName.MERGE]
 
-    resolved_slice = _store.resolve_stage_inputs(project_id, StageName.SLICE)
-    resolved_convert = _store.resolve_stage_inputs(project_id, StageName.CONVERT)
-    resolved_merge = _store.resolve_stage_inputs(
-        project_id, StageName.MERGE, {"merge_mode": "whole_track"}
-    )
     resolved_sep = _store.resolve_stage_inputs(project_id, StageName.SEPARATE)
 
     has_lrc = bool(project.input_lrc or paths.input_lrc_path(project_id))
+    active_slice_mode = paths.normalize_slice_mode(
+        cv.params.get("active_slice_mode")
+        or sl.params.get("mode")
+        or (SliceMode.LRC.value if has_lrc else SliceMode.VAD.value)
+    )
+    resolved_slice = _store.resolve_stage_inputs(
+        project_id, StageName.SLICE, {"mode": active_slice_mode}
+    )
+    resolved_convert = _store.resolve_stage_inputs(
+        project_id,
+        StageName.CONVERT,
+        {"slice_mode": active_slice_mode, "active_slice_mode": active_slice_mode},
+    )
+    resolved_merge = _store.resolve_stage_inputs(
+        project_id,
+        StageName.MERGE,
+        {"merge_mode": "whole_track", "slice_mode": active_slice_mode},
+    )
+    resolved_merge_slice = _store.resolve_stage_inputs(
+        project_id,
+        StageName.MERGE,
+        {"merge_mode": "slice_stitch", "slice_mode": active_slice_mode},
+    )
     merge_vocals_file, merge_vocals_dir = split_vocals_paths(resolved_merge.get("vocals", ""))
+    _, merge_vocals_dir_slice = split_vocals_paths(resolved_merge_slice.get("vocals", ""))
+    if not merge_vocals_dir_slice:
+        merge_vocals_dir_slice = resolved_merge_slice.get("vocals", "")
     return {
         "display_name": project.display_name,
         "input_audio": project.input_audio,
@@ -130,13 +151,18 @@ def load_project_defaults(project_id: str | None) -> dict[str, Any]:
         "mix_audio": resolved_sep.get("mix_audio", ""),
         "vocals_path": resolved_slice.get("vocals", sep.artifacts.get("vocals", "")),
         "lrc_path": resolved_slice.get("lrc", project.input_lrc or ""),
-        "slice_mode": resolved_slice.get("mode", SliceMode.LRC.value if has_lrc else SliceMode.VAD.value),
+        "slice_mode": active_slice_mode,
+        "active_slice_mode": active_slice_mode,
         "convert_mode": cv.params.get("mode", ConvertMode.SLICE_BATCH.value),
         "reference": resolved_convert.get("reference", ""),
-        "slices_dir": resolved_slice.get("slices_dir", sl.artifacts.get("slices_dir", "")),
-        "manifest": sl.artifacts.get("manifest", ""),
+        "slices_dir": resolved_convert.get("slices_dir", resolved_slice.get("slices_dir", "")),
+        "manifest": (
+            resolved_merge_slice.get("manifest")
+            or resolved_slice.get("manifest")
+            or resolved_convert.get("manifest", sl.artifacts.get("manifest", ""))
+        ),
         "merge_vocals_file": merge_vocals_file,
-        "merge_vocals_dir": merge_vocals_dir,
+        "merge_vocals_dir": merge_vocals_dir_slice or merge_vocals_dir,
         "merge_instrumental": resolved_merge.get("instrumental", ""),
         "merge_reference": resolved_merge.get("reference", project.input_audio or ""),
         "merge_profile": mg.params.get("profile", "full"),
@@ -154,7 +180,9 @@ def _stage_status_line(project_id: str) -> str:
     from webui.helpers import format_stage_icons
 
     project = _store.get_project(project_id)
-    return format_stage_icons({k.value: v.status.value for k, v in project.stages.items()})
+    icons = format_stage_icons({k.value: v.status.value for k, v in project.stages.items()})
+    mode_line = format_slice_mode_status(project_id)
+    return f"{icons}\n\n{mode_line}"
 
 
 def run_stage_ui(

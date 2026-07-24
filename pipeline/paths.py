@@ -108,8 +108,39 @@ def slices_dir(project_id: str) -> Path:
     return output_dir() / "slices" / project_id
 
 
-def slices_manifest_path(project_id: str) -> Path:
+SLICE_MODES = ("lrc", "vad")
+
+
+def normalize_slice_mode(mode: str | None) -> str:
+    if mode in SLICE_MODES:
+        return mode
+    return "lrc"
+
+
+def slices_mode_dir(project_id: str, mode: str) -> Path:
+    return slices_dir(project_id) / normalize_slice_mode(mode)
+
+
+def slices_manifest_path(project_id: str, mode: str | None = None) -> Path:
+    if mode is not None:
+        return slices_mode_dir(project_id, mode) / "manifest.json"
     return slices_dir(project_id) / "manifest.json"
+
+
+def slices_overrides_path(project_id: str, mode: str) -> Path:
+    return slices_mode_dir(project_id, mode) / "overrides.json"
+
+
+def converted_mode_dir(project_id: str, mode: str) -> Path:
+    return converted_dir(project_id) / normalize_slice_mode(mode)
+
+
+def merged_mode_dir(project_id: str, mode: str) -> Path:
+    return merged_dir(project_id) / normalize_slice_mode(mode)
+
+
+def merged_mixed_path(project_id: str, mode: str) -> Path:
+    return merged_mode_dir(project_id, mode) / "mixed.flac"
 
 
 def converted_dir(project_id: str) -> Path:
@@ -169,8 +200,18 @@ def resolve_converted_full_track(project_id: str) -> Path | None:
     return legacy if legacy.is_file() else None
 
 
-def resolve_converted_slices_dir(project_id: str) -> Path | None:
-    """New layout ``slices/``, then legacy flat directory with slice files."""
+def resolve_converted_slices_dir(project_id: str, mode: str | None = None) -> Path | None:
+    """Resolve converted slice directory for *mode* (or legacy layouts)."""
+    if mode is not None:
+        resolved = resolve_converted_mode_dir(project_id, mode)
+        if resolved is not None:
+            return resolved
+
+    for candidate_mode in SLICE_MODES:
+        resolved = resolve_converted_mode_dir(project_id, candidate_mode)
+        if resolved is not None:
+            return resolved
+
     new = converted_slices_dir(project_id)
     if new.is_dir() and _dir_has_audio(new):
         return new
@@ -180,10 +221,40 @@ def resolve_converted_slices_dir(project_id: str) -> Path | None:
     return None
 
 
+def resolve_converted_mode_dir(project_id: str, mode: str) -> Path | None:
+    """``converted/{id}/{mode}/`` when it contains slice audio."""
+    mode_dir = converted_mode_dir(project_id, mode)
+    if mode_dir.is_dir() and _dir_has_audio(mode_dir):
+        return mode_dir
+    return None
+
+
+def resolve_slices_mode_dir(project_id: str, mode: str) -> Path | None:
+    """``slices/{id}/{mode}/`` when it exists; legacy flat root as *vad* fallback."""
+    mode_dir = slices_mode_dir(project_id, mode)
+    manifest = slices_manifest_path(project_id, mode)
+    if mode_dir.is_dir() and (manifest.is_file() or _dir_has_audio(mode_dir)):
+        return mode_dir
+    if normalize_slice_mode(mode) == "vad":
+        base = slices_dir(project_id)
+        legacy_manifest = base / "manifest.json"
+        if base.is_dir() and (legacy_manifest.is_file() or _dir_has_audio(base)):
+            return base
+    return None
+
+
 def has_converted_artifacts(project_id: str) -> bool:
-    return resolve_converted_full_track(project_id) is not None or resolve_converted_slices_dir(
-        project_id
-    ) is not None
+    if resolve_converted_full_track(project_id) is not None:
+        return True
+    return resolve_converted_slices_dir(project_id) is not None
+
+
+def has_per_project_merged(project_id: str, mode: str | None = None) -> bool:
+    if mode is not None:
+        return merged_mixed_path(project_id, mode).is_file()
+    if (merged_dir(project_id) / "mixed.flac").is_file():
+        return True
+    return any(merged_mixed_path(project_id, m).is_file() for m in SLICE_MODES)
 
 
 def merged_dir(project_id: str) -> Path:
@@ -215,10 +286,6 @@ def infer_project_ids_from_separated() -> set[str]:
         if pid:
             ids.add(pid)
     return ids
-
-
-def has_per_project_merged(project_id: str) -> bool:
-    return (merged_dir(project_id) / "mixed.flac").is_file()
 
 
 def input_audio_path(project_id: str) -> Path | None:

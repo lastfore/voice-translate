@@ -9,6 +9,7 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import soundfile as sf
@@ -17,6 +18,11 @@ import torch
 ROOT = Path(__file__).resolve().parent.parent
 SEED_VC_DIR = ROOT / "seed-vc"
 DEFAULT_REFERENCE = SEED_VC_DIR / "examples" / "reference" / "dingzhen_0.wav"
+
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from pipeline.slice_overrides import SliceOverrides, effective_params, load as load_overrides
 
 
 def _ensure_seed_vc_path() -> None:
@@ -213,15 +219,39 @@ def _convert_audio(
     return waveform, sr
 
 
-def _collect_slice_files(slices_dir: Path, manifest: Path | None) -> list[Path]:
+def _collect_slice_entries(slices_dir: Path, manifest: Path | None) -> list[dict[str, str]]:
     if manifest and manifest.exists():
         data = json.loads(manifest.read_text(encoding="utf-8"))
-        return [slices_dir / item["file"] for item in data["slices"]]
-    return sorted(
+        entries: list[dict[str, str]] = []
+        for item in data.get("slices") or []:
+            file_name = str(item.get("file", ""))
+            if not file_name:
+                continue
+            entries.append(
+                {
+                    "id": str(item.get("id", file_name)),
+                    "file": file_name,
+                }
+            )
+        return entries
+    files = sorted(
         list(slices_dir.glob("*.flac"))
         + list(slices_dir.glob("*.wav"))
         + list(slices_dir.glob("*.mp3"))
     )
+    return [{"id": path.stem, "file": path.name} for path in files]
+
+
+def _resolve_reference_path(reference: Path, override_ref: str | None, root: Path) -> Path:
+    if not override_ref:
+        return reference
+    candidate = Path(override_ref)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    candidate = candidate.resolve()
+    if candidate.is_file():
+        return candidate
+    return reference
 
 
 def convert_slices(
@@ -238,6 +268,8 @@ def convert_slices(
     fp16: bool = True,
     limit: int = 0,
     skip_existing: bool = False,
+    slice_ids: list[str] | None = None,
+    overrides_path: Path | None = None,
     on_progress: Callable[[int, int, str], None] | None = None,
 ) -> tuple[int, int]:
     """Convert all slices in *slices_dir*. Returns (success_count, total_count)."""
@@ -256,28 +288,63 @@ def convert_slices(
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    slice_files = _collect_slice_files(slices_dir, manifest_path)
+    entries = _collect_slice_entries(slices_dir, manifest_path)
+    if slice_ids:
+        wanted = set(slice_ids)
+        entries = [entry for entry in entries if entry["id"] in wanted]
     if limit > 0:
-        slice_files = slice_files[:limit]
-    if not slice_files:
+        entries = entries[:limit]
+    if not entries:
         raise ValueError(f"no slice files found in {slices_dir}")
+
+    overrides = load_overrides(overrides_path) if overrides_path else SliceOverrides()
+    stage_defaults = {
+        "diffusion_steps": diffusion_steps,
+        "length_adjust": length_adjust,
+        "inference_cfg_rate": inference_cfg_rate,
+        "auto_f0_adjust": auto_f0_adjust,
+        "semi_tone_shift": semi_tone_shift,
+        "fp16": fp16,
+    }
 
     _ensure_seed_vc_path()
     from inference import load_models
 
-    model_args = _build_args(
-        diffusion_steps=diffusion_steps,
-        length_adjust=length_adjust,
-        inference_cfg_rate=inference_cfg_rate,
-        auto_f0_adjust=auto_f0_adjust,
-        semi_tone_shift=semi_tone_shift,
-        fp16=fp16,
-    )
-    models = load_models(model_args)
+    models = None
+    loaded_key: tuple[Any, ...] | None = None
 
-    total = len(slice_files)
+    total = len(entries)
     ok = 0
-    for idx, source_path in enumerate(slice_files, start=1):
+    for idx, entry in enumerate(entries, start=1):
+        source_path = slices_dir / entry["file"]
+        if not source_path.is_file():
+            if on_progress:
+                on_progress(idx, total, f"missing source: {source_path.name}")
+            continue
+
+        slice_id = entry["id"]
+        eff = effective_params(slice_id, overrides, stage_defaults)
+        ref_path = _resolve_reference_path(
+            reference,
+            eff.get("reference") if isinstance(eff.get("reference"), str) else None,
+            ROOT,
+        )
+        model_args = _build_args(
+            diffusion_steps=int(eff.get("diffusion_steps", diffusion_steps)),
+            length_adjust=float(eff.get("length_adjust", length_adjust)),
+            inference_cfg_rate=float(eff.get("inference_cfg_rate", inference_cfg_rate)),
+            auto_f0_adjust=bool(eff.get("auto_f0_adjust", auto_f0_adjust)),
+            semi_tone_shift=int(eff.get("semi_tone_shift", semi_tone_shift)),
+            fp16=bool(eff.get("fp16", fp16)),
+        )
+        model_key = (
+            model_args.diffusion_steps,
+            model_args.fp16,
+        )
+        if models is None or loaded_key != model_key:
+            models = load_models(model_args)
+            loaded_key = model_key
+
         out_path = output_dir / source_path.name
         if skip_existing and out_path.exists():
             if on_progress:
@@ -287,7 +354,7 @@ def convert_slices(
 
         if on_progress:
             on_progress(idx, total, f"converting {source_path.name}")
-        waveform, sr = _convert_audio(source_path, reference, models, model_args)
+        waveform, sr = _convert_audio(source_path, ref_path, models, model_args)
         sf.write(str(out_path), waveform, sr, subtype="PCM_16")
         ok += 1
 
@@ -325,6 +392,23 @@ def main() -> int:
     parser.add_argument("--no-fp16", action="store_false", dest="fp16")
     parser.add_argument("--limit", type=int, default=0, help="Only convert first N slices (0 = all)")
     parser.add_argument("--skip-existing", action="store_true", help="Skip slices with output present")
+    parser.add_argument(
+        "--slice-ids",
+        type=str,
+        default="",
+        help="Comma-separated slice ids to convert (default: all)",
+    )
+    parser.add_argument(
+        "--overrides",
+        type=Path,
+        default=None,
+        help="Path to overrides.json for per-slice parameters",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-convert even when output exists (disables skip-existing)",
+    )
     args = parser.parse_args()
 
     slices_dir = args.slices_dir.resolve()
@@ -342,6 +426,9 @@ def main() -> int:
     manifest = args.manifest.resolve() if args.manifest else slices_dir / "manifest.json"
     if not manifest.exists():
         manifest = None
+
+    slice_ids = [part.strip() for part in args.slice_ids.split(",") if part.strip()] or None
+    skip_existing = args.skip_existing and not args.force
 
     print(f"Slices dir : {slices_dir}")
     print(f"Reference  : {reference}")
@@ -365,7 +452,9 @@ def main() -> int:
             semi_tone_shift=args.semi_tone_shift,
             fp16=args.fp16,
             limit=args.limit,
-            skip_existing=args.skip_existing,
+            skip_existing=skip_existing,
+            slice_ids=slice_ids,
+            overrides_path=args.overrides.resolve() if args.overrides else None,
             on_progress=_progress,
         )
     except Exception as exc:

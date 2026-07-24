@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ from pathlib import Path
 
 from pipeline import paths
 from pipeline.models import ProgressEvent, SliceMode, StageName
+from pipeline.slice_overrides import load as load_overrides
+from pipeline.slice_overrides import merge_after_reslice, save as save_overrides
 
 
 @dataclass
@@ -68,6 +71,14 @@ def run_slice(
 
     _emit("Starting slice", 0.0)
 
+    slice_mode = paths.normalize_slice_mode(mode)
+    overrides_path = paths.slices_overrides_path(project_id, slice_mode)
+    old_overrides = load_overrides(overrides_path)
+    old_manifest_path = output_dir / "manifest.json"
+    old_manifest: dict | None = None
+    if old_manifest_path.is_file():
+        old_manifest = json.loads(old_manifest_path.read_text(encoding="utf-8"))
+
     if mode == SliceMode.LRC.value:
         if lrc_path is None:
             raise ValueError("LRC mode requires lrc_path")
@@ -90,6 +101,16 @@ def run_slice(
     count = len(written)
     if count == 0:
         raise RuntimeError("No slices were produced")
+
+    if manifest_path.is_file():
+        new_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        merged = merge_after_reslice(
+            old_overrides,
+            new_manifest,
+            mode=slice_mode,
+            old_manifest=old_manifest,
+        )
+        save_overrides(overrides_path, merged)
 
     _emit(f"Wrote {count} slices", 100.0)
     return SliceResult(slices_dir=output_dir, manifest=manifest_path, slice_count=count)

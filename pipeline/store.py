@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from pipeline import paths
+from pipeline.migrate_slices_layout import migrate_legacy_slices_layout
 from pipeline.models import (
     MAX_JOB_HISTORY,
     ConvertMode,
@@ -45,6 +46,15 @@ def _dir_has_audio(directory: Path) -> bool:
         return False
     exts = {".flac", ".wav", ".mp3", ".ogg"}
     return any(p.suffix.lower() in exts for p in directory.iterdir() if p.is_file())
+
+
+def _slices_dir_usable(value: str | Path | None, root: Path) -> bool:
+    p = _abs_from_input(root, value)
+    if p is None or not p.is_dir():
+        return False
+    if (p / "manifest.json").is_file():
+        return True
+    return _dir_has_audio(p)
 
 
 class ProjectStore:
@@ -193,6 +203,12 @@ class ProjectStore:
         repaired: list[Project] = []
         seen_ids: set[str] = set()
 
+        slices_root = paths.output_dir() / "slices"
+        if slices_root.is_dir():
+            for child in slices_root.iterdir():
+                if child.is_dir():
+                    migrate_legacy_slices_layout(child.name)
+
         for existing in self.list_projects():
             seen_ids.add(existing.id)
             updated = self._infer_stage_state(existing)
@@ -249,6 +265,23 @@ class ProjectStore:
 
         return final
 
+    def _active_slice_mode(self, project: Project, overrides: dict | None = None) -> str:
+        if overrides:
+            if overrides.get("slice_mode"):
+                return paths.normalize_slice_mode(str(overrides["slice_mode"]))
+            mode_val = overrides.get("mode")
+            if mode_val in paths.SLICE_MODES:
+                return paths.normalize_slice_mode(str(mode_val))
+        for stage in (StageName.CONVERT, StageName.MERGE, StageName.SLICE):
+            params = project.stages[stage].params
+            if params.get("active_slice_mode"):
+                return paths.normalize_slice_mode(str(params["active_slice_mode"]))
+            if stage == StageName.SLICE and params.get("mode") in paths.SLICE_MODES:
+                return paths.normalize_slice_mode(str(params["mode"]))
+        if project.input_lrc and paths.input_lrc_path(project.id):
+            return SliceMode.LRC.value
+        return SliceMode.VAD.value
+
     def _bootstrap_project(self, project_id: str) -> Project:
         now = utc_now_iso()
         audio = paths.input_audio_path(project_id)
@@ -294,11 +327,32 @@ class ProjectStore:
             }
 
         sdir = paths.slices_dir(pid)
-        manifest = paths.slices_manifest_path(pid)
-        if sdir.is_dir() and _dir_has_audio(sdir):
+        slice_mode_art: dict[str, dict[str, str]] = {}
+        for mode in paths.SLICE_MODES:
+            mode_dir = paths.resolve_slices_mode_dir(pid, mode)
+            if not mode_dir:
+                continue
+            manifest = mode_dir / "manifest.json"
+            entry: dict[str, str] = {"slices_dir": rel_path(mode_dir, self.root)}
+            if manifest.is_file():
+                entry["manifest"] = rel_path(manifest, self.root)
+            slice_mode_art[mode] = entry
+
+        if slice_mode_art:
             rec = project.stages[StageName.SLICE]
             if rec.status == StageStatus.NOT_RUN:
                 rec.status = StageStatus.DONE
+            active = self._active_slice_mode(project)
+            rec.artifacts = dict(slice_mode_art)
+            if active in slice_mode_art:
+                rec.artifacts["slices_dir"] = slice_mode_art[active]["slices_dir"]
+                if "manifest" in slice_mode_art[active]:
+                    rec.artifacts["manifest"] = slice_mode_art[active]["manifest"]
+        elif sdir.is_dir() and _dir_has_audio(sdir):
+            rec = project.stages[StageName.SLICE]
+            if rec.status == StageStatus.NOT_RUN:
+                rec.status = StageStatus.DONE
+            manifest = paths.slices_manifest_path(pid)
             rec.artifacts = {
                 "slices_dir": rel_path(sdir, self.root),
                 "manifest": rel_path(manifest, self.root) if manifest.is_file() else None,
@@ -307,23 +361,52 @@ class ProjectStore:
 
         cdir = paths.converted_dir(pid)
         full = paths.resolve_converted_full_track(pid)
+        convert_mode_art: dict[str, dict[str, str]] = {}
+        for mode in paths.SLICE_MODES:
+            converted = paths.resolve_converted_mode_dir(pid, mode)
+            if converted:
+                convert_mode_art[mode] = {"converted_dir": rel_path(converted, self.root)}
+
         slices = paths.resolve_converted_slices_dir(pid)
-        if full or slices:
+        if full or slices or convert_mode_art:
             rec = project.stages[StageName.CONVERT]
             if rec.status == StageStatus.NOT_RUN:
                 rec.status = StageStatus.DONE
-            artifacts: dict[str, str | None] = {}
+            artifacts: dict[str, Any] = dict(convert_mode_art)
             if slices:
+                active = self._active_slice_mode(project)
                 artifacts["converted_dir"] = rel_path(slices, self.root)
+                if active not in artifacts:
+                    artifacts[active] = {"converted_dir": rel_path(slices, self.root)}
             elif cdir.is_dir() and _dir_has_audio(cdir):
                 artifacts["converted_dir"] = rel_path(cdir, self.root)
             if full:
                 artifacts["full_track"] = rel_path(full, self.root)
             rec.artifacts = {k: v for k, v in artifacts.items() if v}
 
+        merge_mode_art: dict[str, dict[str, str]] = {}
+        for mode in paths.SLICE_MODES:
+            mixed = paths.merged_mixed_path(pid, mode)
+            if mixed.is_file():
+                merge_mode_art[mode] = {
+                    "merged_dir": rel_path(mixed.parent, self.root),
+                    "mixed": rel_path(mixed, self.root),
+                }
+                vocals = mixed.parent / "vocals.flac"
+                if vocals.is_file():
+                    merge_mode_art[mode]["vocals"] = rel_path(vocals, self.root)
+
         mdir = paths.merged_dir(pid)
         mixed = mdir / "mixed.flac"
-        if mixed.is_file():
+        if merge_mode_art:
+            rec = project.stages[StageName.MERGE]
+            if rec.status == StageStatus.NOT_RUN:
+                rec.status = StageStatus.DONE
+            active = self._active_slice_mode(project)
+            rec.artifacts = dict(merge_mode_art)
+            if active in merge_mode_art:
+                rec.artifacts.update(merge_mode_art[active])
+        elif mixed.is_file():
             rec = project.stages[StageName.MERGE]
             if rec.status == StageStatus.NOT_RUN:
                 rec.status = StageStatus.DONE
@@ -452,10 +535,12 @@ class ProjectStore:
                 resolved["mode"] = (
                     SliceMode.LRC.value if resolved.get("lrc") and _path_exists(resolved.get("lrc"), self.root) else SliceMode.VAD.value
                 )
-            resolved.setdefault("output_dir", rel_path(paths.slices_dir(pid), self.root))
+            slice_mode = paths.normalize_slice_mode(resolved.get("mode"))
+            resolved.setdefault("output_dir", rel_path(paths.slices_mode_dir(pid, slice_mode), self.root))
 
         elif stage == StageName.CONVERT:
             mode = resolved.get("mode", ConvertMode.SLICE_BATCH.value)
+            slice_mode = self._active_slice_mode(project, overrides)
             if not resolved.get("reference"):
                 ref = paths.project_reference_path(pid)
                 if ref:
@@ -474,43 +559,67 @@ class ProjectStore:
                             resolved["source_vocals"] = rel_path(vocals, self.root)
                 resolved.setdefault("output_path", rel_path(paths.converted_full_track_path(pid), self.root))
             else:
-                if not resolved.get("slices_dir"):
-                    art_dir = project.stages[StageName.SLICE].artifacts.get("slices_dir")
-                    if art_dir and _path_exists(art_dir, self.root):
-                        resolved["slices_dir"] = art_dir
+                slice_art = project.stages[StageName.SLICE].artifacts.get(slice_mode)
+                if isinstance(slice_art, dict):
+                    if not resolved.get("slices_dir") and slice_art.get("slices_dir"):
+                        resolved["slices_dir"] = slice_art["slices_dir"]
+                    if not resolved.get("manifest") and slice_art.get("manifest"):
+                        resolved["manifest"] = slice_art["manifest"]
+                if not resolved.get("slices_dir") or not _path_exists(resolved.get("slices_dir"), self.root):
+                    mode_dir = paths.resolve_slices_mode_dir(pid, slice_mode)
+                    if mode_dir:
+                        resolved["slices_dir"] = rel_path(mode_dir, self.root)
                     elif paths.slices_dir(pid).is_dir():
                         resolved["slices_dir"] = rel_path(paths.slices_dir(pid), self.root)
-                if not resolved.get("manifest"):
-                    manifest = paths.slices_manifest_path(pid)
+                if not resolved.get("manifest") or not _path_exists(resolved.get("manifest"), self.root):
+                    manifest = paths.slices_manifest_path(pid, slice_mode)
                     if manifest.is_file():
                         resolved["manifest"] = rel_path(manifest, self.root)
-                resolved.setdefault("output_dir", rel_path(paths.converted_slices_dir(pid), self.root))
+                resolved.setdefault("output_dir", rel_path(paths.converted_mode_dir(pid, slice_mode), self.root))
+                resolved["slice_mode"] = slice_mode
+                resolved["active_slice_mode"] = slice_mode
 
         elif stage == StageName.MERGE:
             merge_mode = overrides.get("merge_mode", "whole_track") if overrides else "whole_track"
+            slice_mode = self._active_slice_mode(project, overrides)
+            if overrides and overrides.get("merge_mode"):
+                vocals_saved = resolved.get("vocals")
+                if vocals_saved:
+                    vpath = _abs_from_input(self.root, vocals_saved)
+                    if vpath:
+                        if merge_mode == "slice_stitch" and vpath.is_file():
+                            resolved.pop("vocals", None)
+                        elif merge_mode == "whole_track" and vpath.is_dir():
+                            resolved.pop("vocals", None)
             if not resolved.get("vocals"):
                 convert_art = project.stages[StageName.CONVERT].artifacts
-                full = convert_art.get("full_track")
-                cdir = convert_art.get("converted_dir")
-                candidates: list[str | None] = []
                 if merge_mode == "slice_stitch":
-                    candidates = [cdir, full]
-                else:
-                    candidates = [full, cdir]
-                for candidate in candidates:
-                    if candidate and _path_exists(candidate, self.root):
-                        resolved["vocals"] = candidate
-                        break
-                if not resolved.get("vocals"):
-                    if merge_mode == "slice_stitch":
-                        slices = paths.resolve_converted_slices_dir(pid)
+                    mode_art = convert_art.get(slice_mode)
+                    cdir = mode_art.get("converted_dir") if isinstance(mode_art, dict) else None
+                    if not cdir:
+                        cdir = convert_art.get("converted_dir")
+                    if cdir and _path_exists(cdir, self.root):
+                        cpath = _abs_from_input(self.root, cdir)
+                        if cpath and cpath.is_dir():
+                            resolved["vocals"] = cdir
+                    if not resolved.get("vocals"):
+                        slices = paths.resolve_converted_mode_dir(pid, slice_mode) or paths.resolve_converted_slices_dir(pid)
                         if slices:
                             resolved["vocals"] = rel_path(slices, self.root)
-                        else:
-                            full = paths.resolve_converted_full_track(pid)
-                            if full:
-                                resolved["vocals"] = rel_path(full, self.root)
-                    else:
+                    if not resolved.get("vocals"):
+                        full = paths.resolve_converted_full_track(pid)
+                        if full:
+                            resolved["vocals"] = rel_path(full, self.root)
+                else:
+                    full = convert_art.get("full_track")
+                    cdir = convert_art.get("converted_dir")
+                    for candidate in (full, cdir):
+                        if candidate and _path_exists(candidate, self.root):
+                            cpath = _abs_from_input(self.root, candidate)
+                            if cpath and cpath.is_file():
+                                resolved["vocals"] = candidate
+                                break
+                    if not resolved.get("vocals"):
                         full = paths.resolve_converted_full_track(pid)
                         if full:
                             resolved["vocals"] = rel_path(full, self.root)
@@ -540,13 +649,19 @@ class ProjectStore:
                     vocals = paths.separated_vocals_path(pid)
                     if vocals:
                         resolved["original_vocals"] = rel_path(vocals, self.root)
-            if not resolved.get("manifest"):
-                manifest = paths.slices_manifest_path(pid)
+            if not resolved.get("manifest") or not _path_exists(resolved.get("manifest"), self.root):
+                manifest = paths.slices_manifest_path(pid, slice_mode)
                 if manifest.is_file():
                     resolved["manifest"] = rel_path(manifest, self.root)
-            if not resolved.get("slices_dir") and paths.slices_dir(pid).is_dir():
-                resolved["slices_dir"] = rel_path(paths.slices_dir(pid), self.root)
-            resolved.setdefault("output_dir", rel_path(paths.merged_dir(pid), self.root))
+            if not resolved.get("slices_dir") or not _slices_dir_usable(resolved.get("slices_dir"), self.root):
+                mode_dir = paths.resolve_slices_mode_dir(pid, slice_mode)
+                if mode_dir:
+                    resolved["slices_dir"] = rel_path(mode_dir, self.root)
+                elif paths.slices_dir(pid).is_dir():
+                    resolved["slices_dir"] = rel_path(paths.slices_dir(pid), self.root)
+            resolved.setdefault("output_dir", rel_path(paths.merged_mode_dir(pid, slice_mode), self.root))
+            resolved["slice_mode"] = slice_mode
+            resolved["active_slice_mode"] = slice_mode
 
         return resolved
 
@@ -555,7 +670,9 @@ class ProjectStore:
         project = self.get_project(project_id)
         has_input = bool(project.input_audio and _path_exists(project.input_audio, self.root))
         has_sep = bool(paths.separated_vocals_path(project_id))
-        has_slices = paths.slices_dir(project_id).is_dir() and _dir_has_audio(paths.slices_dir(project_id))
+        has_slices = any(
+            paths.resolve_slices_mode_dir(project_id, mode) for mode in paths.SLICE_MODES
+        ) or (paths.slices_dir(project_id).is_dir() and _dir_has_audio(paths.slices_dir(project_id)))
         has_convert = paths.has_converted_artifacts(project_id)
         has_merge = paths.has_per_project_merged(project_id) or (
             paths.legacy_flat_merged_mixed().is_file()
@@ -590,9 +707,12 @@ class ProjectStore:
         for stage in stages:
             overrides: dict[str, Any] = {}
             if stage == StageName.CONVERT:
-                overrides["mode"] = (
-                    convert_mode.value if isinstance(convert_mode, ConvertMode) else convert_mode
-                )
+                cm = convert_mode.value if isinstance(convert_mode, ConvertMode) else convert_mode
+                overrides["mode"] = cm
+                if cm != ConvertMode.FULL_TRACK.value:
+                    sm = slice_mode.value if isinstance(slice_mode, SliceMode) else slice_mode
+                    overrides["slice_mode"] = sm
+                    overrides["active_slice_mode"] = sm
             if stage == StageName.SLICE:
                 overrides["mode"] = (
                     slice_mode.value if isinstance(slice_mode, SliceMode) else slice_mode
