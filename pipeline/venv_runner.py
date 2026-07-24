@@ -51,6 +51,12 @@ def separator_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     root = get_root()
     model_dir = get_separator_env() / "models" / "audio-separator"
     env = os.environ.copy()
+    # Subprocesses must not inherit broken proxy settings (common Web UI startup issue).
+    env["HTTP_PROXY"] = ""
+    env["HTTPS_PROXY"] = ""
+    env["ALL_PROXY"] = ""
+    env.setdefault("NO_PROXY", "127.0.0.1,localhost")
+    env.setdefault("no_proxy", "127.0.0.1,localhost")
     env.update(
         {
             "TORCH_HOME": str(get_separator_env() / "models" / "torch-hub"),

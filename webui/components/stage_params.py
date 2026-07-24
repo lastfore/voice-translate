@@ -11,6 +11,7 @@ from pipeline.stage_params import (
     StageParam,
     merge_stage_params,
     params_for_stage,
+    partition_bool_params,
     resolve_default,
     separator_model_comparison_markdown,
 )
@@ -74,6 +75,14 @@ def _build_component(param: StageParam) -> gr.Component:
     return gr.Textbox(label=param.label, value=str(param.default), info=info)
 
 
+def _register_params(panel: StageParamPanel, param_list: list[StageParam]) -> None:
+    for param in param_list:
+        if param.key in panel.components:
+            continue
+        panel.components[param.key] = _build_component(param)
+        panel.keys.append(param.key)
+
+
 def _param_matches_filter(
     param: StageParam,
     *,
@@ -126,12 +135,14 @@ def build_stage_param_panel(
     if not param_list:
         return panel
 
-    with gr.Accordion(accordion_label, open=open):
-        for param in param_list:
-            panel.components[param.key] = _build_component(param)
-            panel.keys.append(param.key)
-        if stage_key == StageName.SEPARATE.value:
-            gr.Markdown(separator_model_comparison_markdown())
+    bool_params, other_params = partition_bool_params(param_list)
+    _register_params(panel, bool_params)
+
+    if other_params:
+        with gr.Accordion(accordion_label, open=open):
+            _register_params(panel, other_params)
+            if stage_key == StageName.SEPARATE.value:
+                gr.Markdown(separator_model_comparison_markdown())
     return panel
 
 
@@ -145,13 +156,16 @@ def build_wizard_param_panels() -> StageParamPanel:
         (StageName.MERGE, "合并参数"),
     ]
     for stage, title in sections:
-        params = params_for_stage(stage.value, wizard_only=True)
+        params = [
+            p
+            for p in params_for_stage(stage.value, wizard_only=True)
+            if p.key not in combined.components
+        ]
         if not params:
             continue
-        with gr.Accordion(title, open=False):
-            for param in params:
-                if param.key in combined.components:
-                    continue
-                combined.components[param.key] = _build_component(param)
-                combined.keys.append(param.key)
+        bool_params, other_params = partition_bool_params(params)
+        _register_params(combined, bool_params)
+        if other_params:
+            with gr.Accordion(title, open=False):
+                _register_params(combined, other_params)
     return combined

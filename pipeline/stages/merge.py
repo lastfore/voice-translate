@@ -74,6 +74,10 @@ def run_merge(
 
     _emit(f"Merging with profile={profile}", 5.0)
     merge_mod = _load_merge_module()
+
+    def _karaoke_line(line: str) -> None:
+        _emit(line, 45.0)
+
     vocals_out, mixed_out = merge_mod.merge_audio(
         vocals,
         instrumental,
@@ -87,6 +91,7 @@ def run_merge(
         vocals_gain_db=vocals_gain_db,
         instrumental_gain_db=instrumental_gain_db,
         skip_mastering=skip_mastering,
+        on_line=_karaoke_line,
     )
     _emit("Merge complete", 100.0)
     return MergeResult(vocals=vocals_out, mixed=mixed_out, merged_dir=output_dir)

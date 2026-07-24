@@ -291,6 +291,13 @@ def params_for_stage(stage: str, *, wizard_only: bool = False) -> list[StagePara
     return list(items)
 
 
+def partition_bool_params(param_list: list[StageParam]) -> tuple[list[StageParam], list[StageParam]]:
+    """Split bool params out — Gradio accordions may drop checkbox values when collapsed."""
+    bool_params = [p for p in param_list if p.param_type == "bool"]
+    other_params = [p for p in param_list if p.param_type != "bool"]
+    return bool_params, other_params
+
+
 def default_stage_params(stage: str, *, wizard_only: bool = False) -> dict[str, Any]:
     return {p.key: resolve_default(p) for p in params_for_stage(stage, wizard_only=wizard_only)}
 

@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -356,10 +357,18 @@ def clean_instrumental(
     instrumental_path: Path,
     output_dir: Path,
     model_dir: Path,
+    *,
+    on_line: Callable[[str], None] | None = None,
 ) -> Path:
     work_dir = Path(tempfile.mkdtemp(prefix="karaoke-clean-"))
     try:
-        from pipeline.venv_runner import separator_cli_cmd, separator_env
+        from pipeline.venv_runner import run_subprocess, separator_cli_cmd, separator_env
+
+        def _log(line: str) -> None:
+            if on_line:
+                on_line(line)
+            else:
+                print(line, file=sys.stderr)
 
         cmd = separator_cli_cmd(
             str(instrumental_path),
@@ -371,9 +380,17 @@ def clean_instrumental(
             "flac",
             "--output_dir",
             str(work_dir),
+            "--single_stem",
+            "Instrumental",
         )
-        print(f"Running Karaoke clean: {' '.join(cmd)}")
-        subprocess.run(cmd, check=True, env=separator_env())
+        _log(f"Running Karaoke clean: {' '.join(cmd)}")
+        result = run_subprocess(cmd, env=separator_env(), on_line=_log)
+        if result.returncode != 0:
+            detail = (result.stdout or "").strip()
+            tail = detail[-2000:] if detail else "(no subprocess output)"
+            raise RuntimeError(
+                f"Karaoke clean failed with exit code {result.returncode}. Last output:\n{tail}"
+            )
 
         candidates = list(work_dir.glob("*Instrumental*.flac")) + list(work_dir.glob("*instrumental*.flac"))
         if not candidates:
@@ -381,6 +398,7 @@ def clean_instrumental(
 
         clean_path = output_dir / "instrumental_clean.flac"
         shutil.copy2(candidates[0], clean_path)
+        _log(f"Karaoke clean wrote {clean_path.name}")
         return clean_path
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
@@ -481,6 +499,7 @@ def merge_audio(
     instrumental_gain_db: float = 0.0,
     skip_mastering: bool = False,
     model_dir: Path = DEFAULT_MODEL_DIR,
+    on_line: Callable[[str], None] | None = None,
 ) -> tuple[Path, Path]:
     profile = PROFILES[profile_name]
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -494,7 +513,9 @@ def merge_audio(
 
     inst_path = instrumental
     if clean_instrumental_flag and profile.karaoke_clean:
-        inst_path = clean_instrumental(instrumental, output_dir, model_dir)
+        if on_line:
+            on_line("Starting Karaoke instrumental clean...")
+        inst_path = clean_instrumental(instrumental, output_dir, model_dir, on_line=on_line)
         inst_audio, inst_sr = load_audio(inst_path)
         inst_audio = resample_audio(inst_audio, inst_sr, TARGET_SR)
 

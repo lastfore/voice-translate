@@ -793,6 +793,13 @@ def build_app() -> gr.Blocks:
 
             )
 
+            config_line = (
+                f"[配置] skip_existing={params.get('skip_existing')}, "
+                f"fp16={params.get('fp16')}, auto_f0_adjust={params.get('auto_f0_adjust')}"
+            )
+
+            yield config_line, "运行中..."
+
             yield from _run_stage_stream(pid, StageName.CONVERT.value, params)
 
 
@@ -833,7 +840,16 @@ def build_app() -> gr.Blocks:
 
 
 
-        def run_merge(pid, mode, vocals_file, vocals_dir, inst, ref, profile, *param_values):
+        def run_merge(
+            pid,
+            mode,
+            vocals_file,
+            vocals_dir,
+            inst,
+            ref,
+            profile,
+            *param_values,
+        ):
 
             vocals = vocals_file if mode == MERGE_WHOLE else vocals_dir
 
@@ -852,6 +868,13 @@ def build_app() -> gr.Blocks:
             }
 
             params.update(collect_params(StageName.MERGE.value, merge_params.values_to_dict(*param_values)))
+
+            config_line = (
+                f"[配置] profile={profile}, clean_instrumental={params.get('clean_instrumental')}, "
+                f"skip_mastering={params.get('skip_mastering')}"
+            )
+
+            yield config_line, "运行中..."
 
             yield from _run_stage_stream(pid, StageName.MERGE.value, params)
 
