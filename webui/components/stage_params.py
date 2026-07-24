@@ -7,7 +7,13 @@ from dataclasses import dataclass, field
 import gradio as gr
 
 from pipeline.models import StageName
-from pipeline.stage_params import StageParam, merge_stage_params, params_for_stage, resolve_default
+from pipeline.stage_params import (
+    StageParam,
+    merge_stage_params,
+    params_for_stage,
+    resolve_default,
+    separator_model_comparison_markdown,
+)
 
 
 @dataclass
@@ -68,15 +74,54 @@ def _build_component(param: StageParam) -> gr.Component:
     return gr.Textbox(label=param.label, value=str(param.default), info=info)
 
 
+def _param_matches_filter(
+    param: StageParam,
+    *,
+    vad_only: bool | None,
+    slice_batch_only: bool | None,
+    full_track_only: bool | None,
+    keys: set[str] | None,
+) -> bool:
+    if keys is not None and param.key not in keys:
+        return False
+    if vad_only is True and not param.vad_only:
+        return False
+    if vad_only is False and param.vad_only:
+        return False
+    if slice_batch_only is True and not param.slice_batch_only:
+        return False
+    if slice_batch_only is False and param.slice_batch_only:
+        return False
+    if full_track_only is True and not param.full_track_only:
+        return False
+    if full_track_only is False and param.full_track_only:
+        return False
+    return True
+
+
 def build_stage_param_panel(
     stage: str | StageName,
     *,
     wizard_only: bool = False,
     accordion_label: str = "高级参数",
     open: bool = False,
+    vad_only: bool | None = None,
+    slice_batch_only: bool | None = None,
+    full_track_only: bool | None = None,
+    keys: set[str] | None = None,
 ) -> StageParamPanel:
     stage_key = stage.value if isinstance(stage, StageName) else stage
-    param_list = params_for_stage(stage_key, wizard_only=wizard_only)
+    param_list = [
+        p
+        for p in params_for_stage(stage_key, wizard_only=wizard_only)
+        if _param_matches_filter(
+            p,
+            vad_only=vad_only,
+            slice_batch_only=slice_batch_only,
+            full_track_only=full_track_only,
+            keys=keys,
+        )
+    ]
     panel = StageParamPanel(stage=stage_key)
     if not param_list:
         return panel
@@ -85,6 +130,8 @@ def build_stage_param_panel(
         for param in param_list:
             panel.components[param.key] = _build_component(param)
             panel.keys.append(param.key)
+        if stage_key == StageName.SEPARATE.value:
+            gr.Markdown(separator_model_comparison_markdown())
     return panel
 
 

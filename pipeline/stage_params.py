@@ -28,6 +28,9 @@ class StageParam:
     wizard: bool = False
     # VAD-only params; ignored when slice mode is LRC
     vad_only: bool = False
+    # Convert mode filters
+    slice_batch_only: bool = False
+    full_track_only: bool = False
 
 
 def list_separator_models() -> list[str]:
@@ -39,12 +42,75 @@ def list_separator_models() -> list[str]:
     return names or [DEFAULT_MODEL]
 
 
+# Known MelBand / RoFormer models — used for Web UI comparison hints.
+SEPARATOR_MODEL_PROFILES: dict[str, dict[str, str]] = {
+    "mel_band_roformer_kim_ft_unwa.ckpt": {
+        "quality": "高 (~12.4 dB)",
+        "speed": "快",
+        "vram": "低 (~4 GB)",
+        "recommend": "默认推荐，显存友好、bleed 低",
+    },
+    "vocals_mel_band_roformer.ckpt": {
+        "quality": "高 (~12.6 dB)",
+        "speed": "中",
+        "vram": "中 (~6 GB)",
+        "recommend": "Kimberley Jensen 微调版，音质略优",
+    },
+    "model_bs_roformer_ep_317_sdr_12.9755.ckpt": {
+        "quality": "最高 (~13.0 dB)",
+        "speed": "慢",
+        "vram": "高 (~8 GB+)",
+        "recommend": "追求最佳分离质量时选用",
+    },
+    "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt": {
+        "quality": "中（净化专用）",
+        "speed": "中",
+        "vram": "中 (~6 GB)",
+        "recommend": "仅用于合并时净化伴奏，不作主分离模型",
+    },
+}
+
+
+def separator_model_comparison_markdown() -> str:
+    """Markdown table comparing separator models for the Web UI."""
+    lines = [
+        "### 分离模型对比",
+        "",
+        "| 模型 | 分离质量 | 速度 | 显存 | 说明 |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for name, profile in SEPARATOR_MODEL_PROFILES.items():
+        lines.append(
+            f"| `{name}` | {profile['quality']} | {profile['speed']} | "
+            f"{profile['vram']} | {profile['recommend']} |"
+        )
+    installed = set(list_separator_models())
+    for name in sorted(installed):
+        if name in SEPARATOR_MODEL_PROFILES:
+            continue
+        lines.append(f"| `{name}` | — | — | — | 已安装，详见 audio-separator 文档 |")
+    lines.extend(
+        [
+            "",
+            "**推荐：** 日常使用 `mel_band_roformer_kim_ft_unwa.ckpt`（质量与速度均衡）；"
+            "显存充足且追求极致音质选 `model_bs_roformer_ep_317_sdr_12.9755.ckpt`；"
+            "仅需快速试听可尝试 MDX 系列（质量较低但速度最快）。",
+        ]
+    )
+    return "\n".join(lines)
+
+
 STAGE_PARAMS: dict[str, list[StageParam]] = {
     StageName.SEPARATE.value: [
         StageParam(
             key="model",
             label="分离模型",
-            description="MelBand-RoFormer 模型文件；不同模型在分离质量与速度上各有取舍。",
+            description=(
+                "MelBand-RoFormer 模型文件。"
+                "默认 mel_band_roformer_kim_ft_unwa.ckpt 质量与速度均衡；"
+                "model_bs_roformer_ep_317_sdr_12.9755.ckpt 质量最高但较慢；"
+                "MDX 系列速度最快但质量较低。详见下方对比表。"
+            ),
             param_type="choice",
             default=DEFAULT_MODEL,
             choices_fn=list_separator_models,
@@ -163,6 +229,7 @@ STAGE_PARAMS: dict[str, list[StageParam]] = {
             description="切片批量模式下，已存在输出文件的切片不再重复转换，便于断点续跑。",
             param_type="bool",
             default=True,
+            slice_batch_only=True,
         ),
         StageParam(
             key="limit",
@@ -173,6 +240,7 @@ STAGE_PARAMS: dict[str, list[StageParam]] = {
             minimum=0,
             maximum=9999,
             step=1,
+            slice_batch_only=True,
         ),
     ],
     StageName.MERGE.value: [
@@ -267,7 +335,13 @@ def coerce_param_value(param: StageParam, value: Any) -> Any:
     return str(value)
 
 
-def collect_params(stage: str, values: dict[str, Any], *, slice_mode: str | None = None) -> dict[str, Any]:
+def collect_params(
+    stage: str,
+    values: dict[str, Any],
+    *,
+    slice_mode: str | None = None,
+    convert_mode: str | None = None,
+) -> dict[str, Any]:
     """Filter params for stage execution (e.g. drop VAD keys in LRC mode)."""
     schema = {p.key: p for p in params_for_stage(stage)}
     out: dict[str, Any] = {}
@@ -276,6 +350,10 @@ def collect_params(stage: str, values: dict[str, Any], *, slice_mode: str | None
             continue
         param = schema[key]
         if param.vad_only and slice_mode and slice_mode != "vad":
+            continue
+        if param.slice_batch_only and convert_mode and convert_mode != "slice_batch":
+            continue
+        if param.full_track_only and convert_mode and convert_mode != "full_track":
             continue
         out[key] = coerce_param_value(param, value)
     return out

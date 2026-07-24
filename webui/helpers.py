@@ -52,6 +52,20 @@ def abs_path(value: str | None) -> Path | None:
     return p.resolve() if p.exists() else None
 
 
+def is_directory_path(value: str | None) -> bool:
+    p = abs_path(value)
+    return p is not None and p.is_dir()
+
+
+def split_vocals_paths(vocals: str | None) -> tuple[str, str]:
+    """Return (whole_track_file, slice_directory) paths from a resolved vocals value."""
+    if not vocals or not str(vocals).strip():
+        return "", ""
+    if is_directory_path(vocals):
+        return "", str(vocals)
+    return str(vocals), ""
+
+
 def audio_if_exists(value: str | None) -> str | None:
     p = abs_path(value)
     return str(p) if p and p.is_file() else None

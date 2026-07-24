@@ -483,18 +483,31 @@ class ProjectStore:
                 resolved.setdefault("output_dir", rel_path(paths.converted_dir(pid), self.root))
 
         elif stage == StageName.MERGE:
+            merge_mode = overrides.get("merge_mode", "whole_track") if overrides else "whole_track"
             if not resolved.get("vocals"):
                 convert_art = project.stages[StageName.CONVERT].artifacts
                 full = convert_art.get("full_track")
                 cdir = convert_art.get("converted_dir")
-                if full and _path_exists(full, self.root):
-                    resolved["vocals"] = full
-                elif cdir and _path_exists(cdir, self.root):
-                    resolved["vocals"] = cdir
-                elif paths.converted_full_track_path(pid).is_file():
-                    resolved["vocals"] = rel_path(paths.converted_full_track_path(pid), self.root)
-                elif paths.converted_dir(pid).is_dir() and _dir_has_audio(paths.converted_dir(pid)):
-                    resolved["vocals"] = rel_path(paths.converted_dir(pid), self.root)
+                candidates: list[str | None] = []
+                if merge_mode == "slice_stitch":
+                    candidates = [cdir, full]
+                else:
+                    candidates = [full, cdir]
+                for candidate in candidates:
+                    if candidate and _path_exists(candidate, self.root):
+                        resolved["vocals"] = candidate
+                        break
+                if not resolved.get("vocals"):
+                    if merge_mode == "slice_stitch":
+                        if paths.converted_dir(pid).is_dir() and _dir_has_audio(paths.converted_dir(pid)):
+                            resolved["vocals"] = rel_path(paths.converted_dir(pid), self.root)
+                        elif paths.converted_full_track_path(pid).is_file():
+                            resolved["vocals"] = rel_path(paths.converted_full_track_path(pid), self.root)
+                    else:
+                        if paths.converted_full_track_path(pid).is_file():
+                            resolved["vocals"] = rel_path(paths.converted_full_track_path(pid), self.root)
+                        elif paths.converted_dir(pid).is_dir() and _dir_has_audio(paths.converted_dir(pid)):
+                            resolved["vocals"] = rel_path(paths.converted_dir(pid), self.root)
             if not resolved.get("instrumental"):
                 art_inst = project.stages[StageName.SEPARATE].artifacts.get("instrumental")
                 if art_inst and _path_exists(art_inst, self.root):

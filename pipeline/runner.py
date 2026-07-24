@@ -282,6 +282,11 @@ class StageRunner:
             instrumental = _abs("instrumental")
             assert vocals is not None and instrumental is not None
             profile = params.get("profile") or params.get("merge_profile", "full")
+            manifest = _abs("manifest")
+            slices_dir = _abs("slices_dir")
+            if vocals.is_file():
+                manifest = None
+                slices_dir = None
             result = run_merge(
                 project_id,
                 vocals,
@@ -290,8 +295,8 @@ class StageRunner:
                 profile=profile,
                 reference=_abs("reference"),
                 original_vocals=_abs("original_vocals"),
-                manifest=_abs("manifest"),
-                slices_dir=_abs("slices_dir"),
+                manifest=manifest,
+                slices_dir=slices_dir,
                 clean_instrumental=bool(params.get("clean_instrumental", False)),
                 vocals_gain_db=float(params.get("vocals_gain_db", params.get("vocals_gain", 0.0))),
                 instrumental_gain_db=float(

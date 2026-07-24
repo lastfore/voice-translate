@@ -297,7 +297,10 @@ def build_vocal_track(
     slices_dir: Path | None,
 ) -> np.ndarray:
     manifest_path = resolve_manifest(vocals, manifest)
-    use_slices = profile.stitch_slices and manifest_path is not None
+    # Slice stitching only applies when --vocals points at a converted slices directory.
+    # A single whole-track file (e.g. full.flac) must not fall back to manifest stitching
+    # just because a project manifest exists.
+    use_slices = profile.stitch_slices and manifest_path is not None and vocals.is_dir()
 
     if use_slices:
         converted_dir = vocals if vocals.is_dir() else vocals.parent

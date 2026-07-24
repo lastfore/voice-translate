@@ -39,6 +39,21 @@ def test_collect_params_keeps_vad_in_vad_mode() -> None:
     assert out["vad_threshold"] == 0.2
 
 
+def test_collect_params_skips_batch_only_in_full_track_mode() -> None:
+    values = default_stage_params(StageName.CONVERT.value)
+    values["limit"] = 3
+    out = collect_params(StageName.CONVERT.value, values, convert_mode="full_track")
+    assert "limit" not in out
+    assert "skip_existing" not in out
+
+
+def test_collect_params_keeps_batch_only_in_slice_batch_mode() -> None:
+    values = default_stage_params(StageName.CONVERT.value)
+    values["limit"] = 3
+    out = collect_params(StageName.CONVERT.value, values, convert_mode="slice_batch")
+    assert out["limit"] == 3
+
+
 def test_wizard_params_merge_all_stages() -> None:
     saved = {
         StageName.CONVERT.value: {"diffusion_steps": 30},

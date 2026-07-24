@@ -14,6 +14,7 @@ from pipeline.stage_params import collect_params, merge_stage_params, merge_wiza
 from pipeline.queue import GpuJobQueue
 from pipeline.runner import StageRunner
 from pipeline.store import ProjectStore
+from webui.helpers import split_vocals_paths
 
 _store = ProjectStore()
 _gpu_queue = GpuJobQueue()
@@ -115,10 +116,13 @@ def load_project_defaults(project_id: str | None) -> dict[str, Any]:
 
     resolved_slice = _store.resolve_stage_inputs(project_id, StageName.SLICE)
     resolved_convert = _store.resolve_stage_inputs(project_id, StageName.CONVERT)
-    resolved_merge = _store.resolve_stage_inputs(project_id, StageName.MERGE)
+    resolved_merge = _store.resolve_stage_inputs(
+        project_id, StageName.MERGE, {"merge_mode": "whole_track"}
+    )
     resolved_sep = _store.resolve_stage_inputs(project_id, StageName.SEPARATE)
 
     has_lrc = bool(project.input_lrc or paths.input_lrc_path(project_id))
+    merge_vocals_file, merge_vocals_dir = split_vocals_paths(resolved_merge.get("vocals", ""))
     return {
         "display_name": project.display_name,
         "input_audio": project.input_audio,
@@ -131,10 +135,12 @@ def load_project_defaults(project_id: str | None) -> dict[str, Any]:
         "reference": resolved_convert.get("reference", ""),
         "slices_dir": resolved_slice.get("slices_dir", sl.artifacts.get("slices_dir", "")),
         "manifest": sl.artifacts.get("manifest", ""),
-        "merge_vocals": resolved_merge.get("vocals", ""),
+        "merge_vocals_file": merge_vocals_file,
+        "merge_vocals_dir": merge_vocals_dir,
         "merge_instrumental": resolved_merge.get("instrumental", ""),
         "merge_reference": resolved_merge.get("reference", project.input_audio or ""),
         "merge_profile": mg.params.get("profile", "full"),
+        "merge_mode": "whole_track",
         "stage_status_text": _stage_status_line(project_id),
         "stage_params": {
             name.value: load_saved_stage_params(project_id, name.value)
