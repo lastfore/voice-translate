@@ -149,3 +149,85 @@ def read_manifest_preview(manifest_path: str | None, max_rows: int = 8) -> str:
         return "\n".join(lines)
     except (json.JSONDecodeError, OSError):
         return ""
+
+
+SLICE_TABLE_HEADERS = ["id", "start_ms", "end_ms", "text", "file", "status"]
+
+
+def resolve_manifest_path(project_id: str, slice_mode: str) -> Path | None:
+    mode_dir = paths.resolve_slices_mode_dir(project_id, slice_mode)
+    if mode_dir is None:
+        return None
+    manifest = mode_dir / "manifest.json"
+    return manifest if manifest.is_file() else None
+
+
+def load_manifest_entries(project_id: str | None, slice_mode: str) -> list[dict]:
+    if not project_id:
+        return []
+    manifest_path = resolve_manifest_path(project_id, slice_mode)
+    if manifest_path is None:
+        return []
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        return list(data.get("slices") or [])
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def _tune_status_for_slice(project_id: str, slice_mode: str, slice_id: str) -> str:
+    overrides_path = paths.slices_overrides_path(project_id, slice_mode)
+    if not overrides_path.is_file():
+        return ""
+    from pipeline.slice_overrides import load as load_overrides
+
+    overrides = load_overrides(overrides_path)
+    return "精修" if slice_id in overrides.slices else ""
+
+
+def audio_for_slice(project_id: str, slice_mode: str, slice_id: str) -> str | None:
+    entries = load_manifest_entries(project_id, slice_mode)
+    item = next((entry for entry in entries if entry.get("id") == slice_id), None)
+    if not item:
+        return None
+    file_name = str(item.get("file", ""))
+    base = paths.resolve_slices_mode_dir(project_id, slice_mode)
+    if base is None:
+        return None
+    return audio_if_exists(str(base / file_name))
+
+
+def load_slice_table(
+    project_id: str | None,
+    slice_mode: str,
+    *,
+    include_tune_status: bool = True,
+) -> tuple[list[list], str | None, str]:
+    entries = load_manifest_entries(project_id, slice_mode)
+    mode_dir = paths.resolve_slices_mode_dir(project_id, slice_mode) if project_id else None
+    dir_label = f"**切片目录：** `{mode_dir}`" if mode_dir else "*无切片目录*"
+
+    rows: list[list] = []
+    for item in entries:
+        slice_id = str(item.get("id", ""))
+        status = (
+            _tune_status_for_slice(project_id, slice_mode, slice_id)
+            if include_tune_status and project_id
+            else ""
+        )
+        rows.append(
+            [
+                slice_id,
+                item.get("start_ms", ""),
+                item.get("end_ms", ""),
+                item.get("text", "") or "",
+                item.get("file", "") or "",
+                status,
+            ]
+        )
+
+    first_audio: str | None = None
+    if rows and project_id:
+        first_audio = audio_for_slice(project_id, slice_mode, str(rows[0][0]))
+
+    return rows, first_audio, dir_label

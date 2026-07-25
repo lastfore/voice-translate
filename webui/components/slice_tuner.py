@@ -19,7 +19,7 @@ from pipeline.slice_overrides import (
 from pipeline.stage_params import collect_params
 from webui import state
 from webui.components.stage_params import StageParamPanel, build_stage_param_panel
-from webui.helpers import audio_if_exists, save_reference_audio
+from webui.helpers import audio_if_exists, load_manifest_entries, save_reference_audio
 
 
 @dataclass
@@ -40,13 +40,7 @@ class SliceTunerBundle:
 
 
 def _manifest_entries(project_id: str | None, slice_mode: str) -> list[dict]:
-    if not project_id:
-        return []
-    manifest_path = paths.slices_manifest_path(project_id, slice_mode)
-    if not manifest_path.is_file():
-        return []
-    data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    return list(data.get("slices") or [])
+    return load_manifest_entries(project_id, slice_mode)
 
 
 def _choice_label(item: dict, overrides_path) -> str:

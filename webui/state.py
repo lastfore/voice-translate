@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from pipeline import paths
-from pipeline.models import ConvertMode, SliceMode, StageName
+from pipeline.models import ConvertMode, SliceMode, StageName, StageStatus
 from pipeline.stage_params import collect_params, merge_stage_params, merge_wizard_params
 from pipeline.queue import GpuJobQueue
 from pipeline.runner import StageRunner
@@ -72,6 +72,55 @@ def create_project_ui(
         return True, f"已创建项目：{project.display_name}"
     except Exception as exc:  # noqa: BLE001 - UI boundary
         return False, str(exc)
+
+
+def _format_deletion_preview(project_id: str | None, scope: str) -> str:
+    if not project_id:
+        return "*请先选择项目*"
+    normalized = scope if scope in ("metadata", "artifacts", "all") else "metadata"
+    rows = _store.preview_project_deletion(project_id, normalized)  # type: ignore[arg-type]
+    lines = [
+        f"### 删除预览：`{project_id}`（{normalized}）",
+        "",
+        "| 类型 | 路径 |",
+        "|------|------|",
+    ]
+    if not rows:
+        lines.append("| — | *无匹配路径* |")
+    else:
+        for kind, rel in rows:
+            lines.append(f"| {kind} | `{rel}` |")
+    return "\n".join(lines)
+
+
+def preview_project_deletion_ui(project_id: str | None, scope: str) -> str:
+    return _format_deletion_preview(project_id, scope)
+
+
+def delete_project_ui(
+    project_id: str | None,
+    scope: str,
+    *,
+    confirmed: bool,
+) -> tuple[bool, str, list[str]]:
+    pid = (project_id or "").strip()
+    if not pid:
+        return False, "请先选择项目", []
+    if not confirmed:
+        return False, "请勾选确认框后再删除", []
+    normalized = scope if scope in ("metadata", "artifacts", "all") else "metadata"
+    try:
+        project = _store.get_project(pid)
+        for record in project.stages.values():
+            if record.status == StageStatus.RUNNING:
+                return False, f"项目 {pid} 有阶段正在运行，请等待完成后再删除", []
+    except KeyError:
+        pass
+
+    deleted = _store.delete_project(pid, scope=normalized)  # type: ignore[arg-type]
+    if not deleted:
+        return False, f"未找到可删除的路径：{pid}", []
+    return True, f"已删除项目 {pid}（{len(deleted)} 项）", deleted
 
 
 def load_saved_stage_params(

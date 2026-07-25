@@ -87,3 +87,66 @@ def test_scan_infers_separate_from_output(workspace: tuple[Path, ProjectStore]) 
     project = store.get_project("song")
     updated = store._infer_stage_state(project)
     assert updated.stages[StageName.SEPARATE].status == StageStatus.DONE
+
+
+def test_collect_project_artifacts(workspace: tuple[Path, ProjectStore]) -> None:
+    root, store = workspace
+    audio = root / "input" / "upload.flac"
+    audio.write_bytes(b"fake")
+    store.create_project("foo", audio)
+    (root / "output" / "separated" / "foo_(Vocals)_x.flac").write_bytes(b"v")
+    (root / "output" / "slices" / "foo" / "lrc").mkdir(parents=True)
+    (root / "output" / "slices" / "foo" / "lrc" / "manifest.json").write_text(
+        '{"slices": []}', encoding="utf-8"
+    )
+
+    from pipeline.paths import collect_project_artifacts, paths_for_scope
+
+    group = collect_project_artifacts("foo")
+    assert group.metadata
+    assert any("slices" in str(p) for p in group.artifacts)
+    assert any(p.name.endswith(".flac") for p in group.inputs)
+
+    meta_paths = paths_for_scope(group, "metadata")
+    assert meta_paths and all("projects" in str(p) for p in meta_paths)
+
+    all_paths = paths_for_scope(group, "all")
+    assert any("input" in str(p) for p in all_paths)
+
+
+def test_delete_project_scopes(workspace: tuple[Path, ProjectStore]) -> None:
+    root, store = workspace
+    audio = root / "input" / "upload.flac"
+    audio.write_bytes(b"fake")
+    store.create_project("foo", audio)
+    (root / "input" / "foo.lrc").write_text("lrc", encoding="utf-8")
+    (root / "output" / "separated" / "foo_(Vocals)_x.flac").write_bytes(b"v")
+    slices = root / "output" / "slices" / "foo"
+    slices.mkdir(parents=True)
+    (slices / "slice.flac").write_bytes(b"s")
+
+    store.delete_project("foo", scope="metadata")
+    assert not (root / "output" / ".projects" / "foo").exists()
+    assert (root / "input" / "foo.flac").is_file()
+    assert slices.is_dir()
+
+    store.create_project("foo", root / "input" / "foo.flac")
+    store.delete_project("foo", scope="artifacts")
+    assert not slices.exists()
+    assert (root / "input" / "foo.flac").is_file()
+
+    store.create_project("foo", root / "input" / "foo.flac")
+    deleted = store.delete_project("foo", scope="all")
+    assert deleted
+    assert not (root / "input" / "foo.flac").exists()
+    assert not (root / "output" / "separated" / "foo_(Vocals)_x.flac").exists()
+
+
+def test_preview_project_deletion(workspace: tuple[Path, ProjectStore]) -> None:
+    root, store = workspace
+    audio = root / "a.flac"
+    audio.write_bytes(b"x")
+    store.create_project("p1", audio)
+    rows = store.preview_project_deletion("p1", "all")
+    assert rows
+    assert any(kind == "input" for kind, _ in rows)

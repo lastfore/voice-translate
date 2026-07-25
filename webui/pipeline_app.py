@@ -74,6 +74,8 @@ from webui.components.path_input import PathInput
 
 from webui.components.project_sidebar import build_sidebar, wire_sidebar
 
+from webui.components.slice_preview import build_slice_preview, slice_preview_values, wire_slice_preview
+
 from webui.components.slice_tuner import build_slice_tuner, wire_slice_tuner
 
 from webui.components.stage_params import StageParamPanel, build_stage_param_panel
@@ -81,9 +83,6 @@ from webui.components.stage_params import StageParamPanel, build_stage_param_pan
 from webui.components.wizard import build_wizard, wizard_defaults_updates
 
 from webui.helpers import audio_if_exists, project_choices, read_manifest_preview, save_reference_audio
-
-
-
 
 
 def _run_stage_stream(project_id, stage, params):
@@ -116,7 +115,7 @@ def _project_field_updates(pid: str | None, *panels: StageParamPanel) -> list:
 
     if not d:
 
-        empty = [gr.update()] * 23
+        empty = [gr.update()] * 25
 
         empty_wizard = [gr.update()] * 6
 
@@ -147,9 +146,9 @@ def _project_field_updates(pid: str | None, *panels: StageParamPanel) -> list:
 
     manifest_preview = read_manifest_preview(d.get("manifest", ""))
 
-    convert_mode = d.get("convert_mode", CONVERT_BATCH)
+    slice_rows, slice_audio, slice_dir_label = slice_preview_values(pid, slice_mode)
 
-    slice_mode = d.get("slice_mode", SLICE_VAD)
+    convert_mode = d.get("convert_mode", CONVERT_BATCH)
 
     base = [
 
@@ -177,7 +176,11 @@ def _project_field_updates(pid: str | None, *panels: StageParamPanel) -> list:
 
         audio_if_exists(str(inst_p) if inst_p else None),
 
-        manifest_preview,
+        slice_rows,
+
+        audio_if_exists(slice_audio),
+
+        slice_dir_label,
 
         manifest_preview,
 
@@ -267,31 +270,19 @@ def build_app() -> gr.Blocks:
 
                     create_msg,
 
+                    delete_scope,
+
+                    delete_preview,
+
+                    delete_preview_btn,
+
+                    delete_confirm,
+
+                    delete_btn,
+
+                    delete_msg,
+
                 ) = build_sidebar()
-
-                wire_sidebar(
-
-                    project_dropdown,
-
-                    stage_status,
-
-                    refresh_btn,
-
-                    new_id,
-
-                    new_name,
-
-                    new_audio,
-
-                    new_lrc,
-
-                    create_btn,
-
-                    create_msg,
-
-                    project_state,
-
-                )
 
 
 
@@ -381,9 +372,7 @@ def build_app() -> gr.Blocks:
 
                         slice_status = gr.Markdown("")
 
-                        slice_manifest = gr.Textbox(label="manifest 预览", lines=6)
-
-                        slice_p1 = gr.Audio(label="切片预览", type="filepath", interactive=False)
+                        slice_preview = build_slice_preview()
 
 
 
@@ -587,6 +576,8 @@ def build_app() -> gr.Blocks:
 
         wire_slice_tuner(slice_tuner, project_state, slice_mode)
 
+        wire_slice_preview(slice_preview, project_state, slice_mode)
+
         wire_mode_tabs(
 
             [(merge_whole_tab, MERGE_WHOLE), (merge_slice_tab, MERGE_SLICE)],
@@ -639,7 +630,11 @@ def build_app() -> gr.Blocks:
 
             sep_inst,
 
-            slice_manifest,
+            slice_preview.slice_table,
+
+            slice_preview.preview_audio,
+
+            slice_preview.slices_dir_label,
 
             merge_manifest_preview,
 
@@ -672,6 +667,48 @@ def build_app() -> gr.Blocks:
             *merge_params.input_components(),
 
         ]
+
+
+
+        wire_sidebar(
+
+            project_dropdown,
+
+            stage_status,
+
+            refresh_btn,
+
+            new_id,
+
+            new_name,
+
+            new_audio,
+
+            new_lrc,
+
+            create_btn,
+
+            create_msg,
+
+            delete_scope,
+
+            delete_preview,
+
+            delete_preview_btn,
+
+            delete_confirm,
+
+            delete_btn,
+
+            delete_msg,
+
+            project_state,
+
+            field_refresh_fn=lambda pid: _project_field_updates(pid, *param_panels),
+
+            field_refresh_outputs=field_outputs,
+
+        )
 
 
 

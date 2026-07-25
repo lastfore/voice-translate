@@ -82,3 +82,17 @@ def test_resolve_converted_layout_legacy_flat(root: Path) -> None:
 
     assert paths.resolve_converted_full_track("legacy") == base / "full.flac"
     assert paths.resolve_converted_slices_dir("legacy") == base
+
+
+def test_collect_project_artifacts_paths(root: Path) -> None:
+    (root / "output" / ".projects" / "foo").mkdir(parents=True)
+    (root / "input" / "foo.flac").write_bytes(b"x")
+    (root / "output" / "slices" / "foo").mkdir(parents=True)
+
+    group = paths.collect_project_artifacts("foo")
+    assert group.metadata
+    assert group.artifacts
+    assert group.inputs
+
+    scoped = paths.paths_for_scope(group, "all")
+    assert any("foo.flac" in str(p) for p in scoped)

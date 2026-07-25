@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from pipeline import paths
+from pipeline.paths import DeleteScope, collect_project_artifacts, paths_for_scope, rel_to_root
 from pipeline.migrate_slices_layout import migrate_legacy_slices_layout
 from pipeline.models import (
     MAX_JOB_HISTORY,
@@ -141,14 +142,52 @@ class ProjectStore:
         self.save_project(project)
         return project
 
-    def delete_project(self, project_id: str, *, remove_files: bool = False) -> None:
-        meta = self._meta_path(project_id)
-        if meta.parent.exists():
-            shutil.rmtree(meta.parent, ignore_errors=True)
-        if remove_files:
-            for d in (paths.slices_dir(project_id), paths.converted_dir(project_id), paths.merged_dir(project_id)):
-                if d.exists():
-                    shutil.rmtree(d, ignore_errors=True)
+    def delete_project(
+        self,
+        project_id: str,
+        *,
+        scope: DeleteScope = "metadata",
+        remove_files: bool | None = None,
+    ) -> list[str]:
+        """Delete project paths for *scope* and return removed paths (repo-relative)."""
+        if remove_files is not None:
+            scope = "artifacts" if remove_files else "metadata"
+
+        group = collect_project_artifacts(project_id)
+        targets = paths_for_scope(group, scope)
+        if not targets:
+            return []
+
+        deleted: list[str] = []
+        sorted_targets = sorted(targets, key=lambda p: len(p.resolve().parts), reverse=True)
+        scheduled_dirs: list[Path] = []
+
+        for target in sorted_targets:
+            resolved = target.resolve()
+            if any(resolved.is_relative_to(parent) for parent in scheduled_dirs):
+                continue
+            try:
+                if resolved.is_dir():
+                    shutil.rmtree(resolved, ignore_errors=False)
+                    scheduled_dirs.append(resolved)
+                elif resolved.is_file():
+                    resolved.unlink(missing_ok=True)
+                deleted.append(rel_to_root(resolved))
+            except OSError:
+                continue
+        return deleted
+
+    def preview_project_deletion(self, project_id: str, scope: DeleteScope) -> list[tuple[str, str]]:
+        group = collect_project_artifacts(project_id)
+        rows: list[tuple[str, str]] = []
+        for path in paths_for_scope(group, scope):
+            kind = "metadata"
+            if path in group.artifacts:
+                kind = "artifact"
+            elif path in group.inputs:
+                kind = "input"
+            rows.append((kind, rel_to_root(path)))
+        return rows
 
     def update_stage(
         self,

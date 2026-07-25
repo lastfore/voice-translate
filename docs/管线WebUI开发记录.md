@@ -56,6 +56,8 @@ py -m pytest tests/ -v
 - `separator-env` 内无 `pip`/`pytest`，本地测试使用系统 `py -m pytest`。
 - `delete_project(remove_files=True)` 仅删除 slices/converted/merged 子目录，不清理 `separated/` 全局产物。
 
+> **2026-07-25 更新：** 已实现方案 B 三档 scope 删除（`metadata` / `artifacts` / `all`），见 [项目删除完整清理方案.md](./项目删除完整清理方案.md)。
+
 ---
 
 ## Phase 2：阶段执行（编排内核执行层）

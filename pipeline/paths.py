@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
+
+DeleteScope = Literal["metadata", "artifacts", "all"]
 
 _VOCALS_STEM_RE = re.compile(r"^(.+?)_\(Vocals\)_", re.IGNORECASE)
 
@@ -314,3 +318,87 @@ def project_reference_path(project_id: str) -> Path | None:
         if path.is_file():
             return path
     return None
+
+
+@dataclass
+class ProjectArtifactGroup:
+    metadata: list[Path]
+    artifacts: list[Path]
+    inputs: list[Path]
+
+
+def _unique_existing(paths_list: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for path in paths_list:
+        if not path.exists():
+            continue
+        key = str(path.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique
+
+
+def _separated_stem_paths(project_id: str) -> list[Path]:
+    base = separated_dir()
+    if not base.is_dir():
+        return []
+    hits: list[Path] = []
+    for path in sorted(base.glob("*.flac")):
+        name_lower = path.name.lower()
+        if project_id.lower() not in name_lower:
+            continue
+        hits.append(path)
+    return hits
+
+
+def collect_project_artifacts(project_id: str) -> ProjectArtifactGroup:
+    """Enumerate on-disk paths associated with *project_id*."""
+    metadata: list[Path] = []
+    meta_dir = projects_meta_dir() / project_id
+    if meta_dir.exists():
+        metadata.append(meta_dir)
+
+    artifacts: list[Path] = []
+    for directory in (slices_dir(project_id), converted_dir(project_id), merged_dir(project_id)):
+        if directory.exists():
+            artifacts.append(directory)
+    artifacts.extend(_separated_stem_paths(project_id))
+
+    inputs: list[Path] = []
+    audio = input_audio_path(project_id)
+    if audio is not None:
+        inputs.append(audio)
+    lrc = input_lrc_path(project_id)
+    if lrc is not None:
+        inputs.append(lrc)
+    ref = project_reference_path(project_id)
+    if ref is not None:
+        inputs.append(ref)
+    ref_dir = input_dir() / project_id
+    if ref_dir.is_dir():
+        inputs.append(ref_dir)
+
+    return ProjectArtifactGroup(
+        metadata=_unique_existing(metadata),
+        artifacts=_unique_existing(artifacts),
+        inputs=_unique_existing(inputs),
+    )
+
+
+def paths_for_scope(group: ProjectArtifactGroup, scope: DeleteScope) -> list[Path]:
+    if scope == "metadata":
+        return list(group.metadata)
+    if scope == "artifacts":
+        return _unique_existing(group.metadata + group.artifacts)
+    return _unique_existing(group.metadata + group.artifacts + group.inputs)
+
+
+def rel_to_root(path: Path) -> str:
+    root = get_root()
+    try:
+        return str(path.resolve().relative_to(root))
+    except ValueError:
+        return str(path.resolve())
