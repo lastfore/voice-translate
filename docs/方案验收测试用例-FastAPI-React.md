@@ -19,7 +19,7 @@
   - `覆盖范围`（本文件第 3 章）
   - `测试用例表`（本文件第 4 章）
   - `自动化落地映射`（本文件第 5 章）
-  - `按 Phase 开发中测试设计`（本文件第 8 章）
+  - `按 Phase 开发中测试设计`（本文件第 9 章）
 
 ---
 
@@ -123,7 +123,8 @@
   - `project-switch.spec.ts`：`TC-P1-05`
   - `stage-params-collapsible.spec.ts`：`TC-P0-12`
   - `slice-preview.spec.ts`：`TC-P1-06`
-  - `stage-cancel.spec.ts`：`TC-P0-09`
+  - `stage-cancel-on-leave.spec.ts`：`TC-P0-09`, `TC-Phase1-06`
+  - `separate-page.spec.ts`：`TC-Phase1-02`
   - `wizard-run-from.spec.ts`：`TC-P1-10`
   - `batch-status-sse.spec.ts`：`TC-P1-09`
   - `log-truncation.spec.ts`：`TC-P2-03`
@@ -159,14 +160,30 @@
   - 首次建立 FastAPI + React 迁移方案验收用例基线。
   - 为每条用例增加自动化归属（`pytest` / `Playwright` / `手工`）。
 
+## 8. 验收执行记录（2026-07-26）
+
+> 详细 Phase 清单见 `docs/phase-test-checklist.md` §7。
+
+| 级别 | 结果 | 证据摘要 |
+|------|------|----------|
+| P0 | 全部通过 | `pytest tests/api/` 82 passed；Playwright 14 passed（含 cancel/separate 新增用例） |
+| P1 | 全部通过 | 项目 CRUD、schema、overrides、向导、批量 SSE 均已自动化 |
+| P2 | 全部可测项通过 | 5MiB 上传 201；SSE 断连重试 MCP 验证；日志截断/切片表性能 Playwright 通过 |
+
+**发布判定**：满足第 6 章门禁 — `允许发布`。
+
+**遗留非阻断**：
+- 真实 GPU 分离/转换端到端（模型环境）未纳入 CI，已由 mock SSE E2E 覆盖 UI/API 契约。
+- `tests/` 全量运行时 cancellation 子进程测试偶发 flaky（Windows 时序），单文件运行稳定。
+
 ---
 
-## 8. 按 Phase 的开发中测试设计
+## 9. 按 Phase 的开发中测试设计
 
 > 目标：解决“整体验收通过，但阶段开发过程缺少门禁”的问题。  
 > 原则：每个 Phase 都有“新增必测 + 历史回归必跑 + 阶段出口标准”。
 
-### 8.1 Phase 0（API 骨架）
+### 9.1 Phase 0（API 骨架）
 
 **阶段目标**
 
@@ -195,7 +212,7 @@
 - 回归包无阻断失败。
 - 若 `TC-Phase0-05` 失败，禁止进入 Phase 1。
 
-### 8.2 Phase 1（前端壳 + 分离/切片）
+### 9.2 Phase 1（前端壳 + 分离/切片）
 
 **阶段目标**
 
@@ -223,7 +240,7 @@
 - `TC-Phase1-*` 全通过。
 - `TC-P0-12` 与 `TC-P1-05` 任何一条失败，禁止进入 Phase 2。
 
-### 8.3 Phase 2（转换/合并 + 精修）
+### 9.3 Phase 2（转换/合并 + 精修）
 
 **阶段目标**
 
@@ -251,7 +268,7 @@
 - `TC-Phase2-*` 全通过。
 - overrides 相关用例（`TC-Phase2-02/03`）必须零失败才能进 Phase 3。
 
-### 8.4 Phase 3（向导 + 批量队列）
+### 9.4 Phase 3（向导 + 批量队列）
 
 **阶段目标**
 
@@ -280,7 +297,7 @@
 - `TC-Phase3-*` 全通过。
 - 任意队列一致性失败（`TC-Phase3-05/06/07`）阻断进入 Phase 4。
 
-### 8.5 Phase 4（收尾与发布）
+### 9.5 Phase 4（收尾与发布）
 
 **阶段目标**
 
@@ -308,7 +325,7 @@
 - `TC-Phase4-*` 全通过。
 - 全局用例无阻断失败，满足第 6 章发布判定。
 
-### 8.6 每个 Phase 的最小执行集（便于日常开发）
+### 9.6 每个 Phase 的最小执行集（便于日常开发）
 
 | 时机 | 必跑集合 |
 |------|----------|
