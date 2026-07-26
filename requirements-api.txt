@@ -1,0 +1,7 @@
+# FastAPI backend dependencies for separator-env (pipeline API, Phase 0+)
+fastapi
+uvicorn
+anyio
+httpx
+pytest
+pytest-asyncio

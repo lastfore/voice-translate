@@ -77,6 +77,30 @@ def test_audio_for_slice_missing_file(root: Path) -> None:
     assert audio_for_slice("demo", "lrc", "slice_000") is None
 
 
+def test_resolve_convert_preview_slice_batch(root: Path) -> None:
+    mode_dir = root / "output" / "converted" / "demo" / "lrc"
+    mode_dir.mkdir(parents=True)
+    (mode_dir / "demo_slice_000.flac").write_bytes(b"x")
+
+    from webui.helpers import resolve_convert_preview_audio
+
+    path = resolve_convert_preview_audio("demo", "slice_batch", "lrc")
+    assert path is not None
+    assert path.endswith("demo_slice_000.flac")
+
+
+def test_resolve_convert_preview_full_track(root: Path) -> None:
+    full_dir = root / "output" / "converted" / "demo" / "full"
+    full_dir.mkdir(parents=True)
+    (full_dir / "full.flac").write_bytes(b"x")
+
+    from webui.helpers import resolve_convert_preview_audio
+
+    path = resolve_convert_preview_audio("demo", "full_track", "lrc")
+    assert path is not None
+    assert path.endswith("full.flac")
+
+
 def test_load_manifest_entries_empty_project() -> None:
     assert load_manifest_entries(None, "lrc") == []
 

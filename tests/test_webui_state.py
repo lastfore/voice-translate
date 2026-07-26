@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from pipeline.models import Project, StageName, StageRecord, StageStatus, utc_now_iso
+from pipeline.store import ProjectStore
 from webui import state
 
 
@@ -42,3 +44,21 @@ def test_project_choices_gradio_tuple_order() -> None:
     ]
     choices = project_choices(summaries)
     assert choices == [(format_project_choice(summaries[0]), "demo")]
+
+
+def test_load_project_defaults_prefers_slice_stage_mode(ui_workspace: Path) -> None:
+    store = ProjectStore(ui_workspace)
+    now = utc_now_iso()
+    project = Project(id="demo", display_name="demo", created_at=now, updated_at=now)
+    project.stages[StageName.SLICE] = StageRecord(
+        status=StageStatus.DONE,
+        params={"mode": "vad", "active_slice_mode": "vad"},
+    )
+    project.stages[StageName.CONVERT] = StageRecord(
+        status=StageStatus.DONE,
+        params={"active_slice_mode": "lrc"},
+    )
+    store.save_project(project)
+
+    defaults = state.load_project_defaults("demo")
+    assert defaults["slice_mode"] == "vad"

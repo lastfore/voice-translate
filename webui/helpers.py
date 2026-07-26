@@ -80,6 +80,26 @@ def first_audio_in_dir(directory: str | None, limit: int = 5) -> list[str]:
     return [str(f) for f in files[:limit]]
 
 
+def resolve_convert_preview_audio(
+    project_id: str | None,
+    convert_mode: str,
+    slice_mode: str,
+) -> str | None:
+    """Preview audio for convert tab: full track file or first converted slice."""
+    if not project_id:
+        return None
+    if convert_mode == "full_track":
+        full_p = paths.resolve_converted_full_track(project_id)
+        return audio_if_exists(str(full_p) if full_p else None)
+    mode_dir = paths.resolve_converted_mode_dir(
+        project_id, slice_mode
+    ) or paths.resolve_converted_slices_dir(project_id, slice_mode)
+    if mode_dir is None:
+        return None
+    previews = first_audio_in_dir(str(mode_dir), limit=1)
+    return audio_if_exists(previews[0] if previews else None)
+
+
 def save_upload(upload_path: str | None, dest: Path) -> Path | None:
     if not upload_path:
         return None

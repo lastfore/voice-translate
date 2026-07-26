@@ -48,6 +48,40 @@ def test_run_slice_stage_mocked(runner_workspace: tuple[ProjectStore, StageRunne
     assert project.stages[StageName.SLICE].artifacts.get("slices_dir")
 
 
+def test_run_slice_prefers_ui_mode_over_saved_inputs(
+    runner_workspace: tuple[ProjectStore, StageRunner, str, Path],
+) -> None:
+    store, runner, pid, root = runner_workspace
+    vocals = root / "output" / "separated" / "song_(Vocals)_m.flac"
+    vocals.write_bytes(b"v")
+    slices_dir = root / "output" / "slices" / pid / "vad"
+    manifest = slices_dir / "manifest.json"
+
+    store.save_stage_inputs(
+        pid,
+        StageName.SLICE,
+        {"vocals": str(vocals), "mode": "lrc", "lrc": "input/song.lrc"},
+    )
+
+    captured: dict[str, str] = {}
+
+    def _fake_run_slice(project_id, vocals_path, out_dir, *, mode, **kwargs):
+        captured["mode"] = mode
+        slices_dir.mkdir(parents=True, exist_ok=True)
+        manifest.write_text("{}", encoding="utf-8")
+        return SliceResult(slices_dir=slices_dir, manifest=manifest, slice_count=1)
+
+    with patch("pipeline.runner.run_slice", side_effect=_fake_run_slice):
+        result = runner.run_stage(
+            pid,
+            StageName.SLICE,
+            {"vocals": str(vocals), "mode": "vad", "lrc": ""},
+        )
+
+    assert result.success
+    assert captured["mode"] == "vad"
+
+
 def test_run_separate_validation_fails(runner_workspace: tuple[ProjectStore, StageRunner, str, Path]) -> None:
     _, runner, pid, _ = runner_workspace
     result = runner.run_stage(pid, StageName.SEPARATE, {"mix_audio": "/nonexistent.flac"})

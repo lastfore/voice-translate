@@ -150,3 +150,33 @@ def test_preview_project_deletion(workspace: tuple[Path, ProjectStore]) -> None:
     rows = store.preview_project_deletion("p1", "all")
     assert rows
     assert any(kind == "input" for kind, _ in rows)
+
+
+def test_resolve_convert_inputs_prefers_slice_stage_mode(workspace: tuple[Path, ProjectStore]) -> None:
+    root, store = workspace
+    audio = root / "input" / "song.flac"
+    audio.write_bytes(b"x")
+    store.create_project("song", audio)
+    vad_dir = root / "output" / "slices" / "song" / "vad"
+    vad_dir.mkdir(parents=True)
+    (vad_dir / "manifest.json").write_text('{"slices": []}', encoding="utf-8")
+
+    project = store.get_project("song")
+    project.stages[StageName.SLICE].params = {
+        "mode": "vad",
+        "active_slice_mode": "vad",
+    }
+    project.stages[StageName.CONVERT].params = {
+        "mode": "full_track",
+        "active_slice_mode": "lrc",
+    }
+    store.save_project(project)
+
+    resolved = store.resolve_stage_inputs(
+        "song",
+        StageName.CONVERT,
+        {"mode": "slice_batch", "slice_mode": "vad", "active_slice_mode": "vad"},
+    )
+    assert resolved["mode"] == "slice_batch"
+    assert resolved["slice_mode"] == "vad"
+    assert resolved["slices_dir"].replace("\\", "/").endswith("slices/song/vad")

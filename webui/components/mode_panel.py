@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import gradio as gr
 
+from webui.mode_utils import mode_from_tab_index
+
 # Merge
 MERGE_WHOLE = "whole_track"
 MERGE_SLICE = "slice_stitch"
@@ -32,10 +34,37 @@ MERGE_SLICE_HELP = (
 )
 
 
-def wire_mode_tabs(tab_mode_pairs: list[tuple[gr.Tab, str]], state: gr.State) -> None:
-    """Sync hidden mode state when the user selects a nested sub-tab."""
-    for tab, mode in tab_mode_pairs:
-        tab.select(lambda m=mode: m, outputs=[state])
+def wire_mode_tabs(
+    tab_mode_pairs: list[tuple[gr.Tab, str]],
+    state: gr.State,
+    *,
+    tabs: gr.Tabs | None = None,
+    index_state: gr.State | None = None,
+) -> None:
+    """Sync hidden mode (and optional tab index) when the user selects a nested sub-tab."""
+    ordered_modes = [mode for _, mode in tab_mode_pairs]
+    default_mode = ordered_modes[0] if ordered_modes else ""
+
+    if tabs is not None:
+
+        def _on_tabs_select(evt: gr.SelectData):
+            mode = mode_from_tab_index(evt.index, ordered_modes, default_mode)
+            if index_state is not None:
+                return evt.index, mode
+            return mode
+
+        outputs: list = [index_state, state] if index_state is not None else [state]
+        tabs.select(_on_tabs_select, outputs=outputs)
+
+    for i, (tab, mode) in enumerate(tab_mode_pairs):
+        if index_state is not None:
+
+            def _on_tab_select(idx: int = i, m: str = mode):
+                return idx, m
+
+            tab.select(_on_tab_select, outputs=[index_state, state])
+        else:
+            tab.select(lambda m=mode: m, outputs=[state])
 
 
 def tabs_selected_update(mode: str, modes: list[str]) -> dict:

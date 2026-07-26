@@ -166,9 +166,11 @@ def load_project_defaults(project_id: str | None) -> dict[str, Any]:
     resolved_sep = _store.resolve_stage_inputs(project_id, StageName.SEPARATE)
 
     has_lrc = bool(project.input_lrc or paths.input_lrc_path(project_id))
+    # Slice tab preview follows the slice stage mode, not convert's last active_slice_mode.
     active_slice_mode = paths.normalize_slice_mode(
-        cv.params.get("active_slice_mode")
-        or sl.params.get("mode")
+        sl.params.get("mode")
+        or sl.params.get("active_slice_mode")
+        or cv.params.get("active_slice_mode")
         or (SliceMode.LRC.value if has_lrc else SliceMode.VAD.value)
     )
     resolved_slice = _store.resolve_stage_inputs(

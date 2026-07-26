@@ -70,6 +70,8 @@ from webui.components.mode_panel import (
 
 )
 
+from webui.mode_utils import mode_from_tab_index, tab_index_for_mode
+
 from webui.components.path_input import PathInput
 
 from webui.components.project_sidebar import build_sidebar, wire_sidebar
@@ -82,7 +84,7 @@ from webui.components.stage_params import StageParamPanel, build_stage_param_pan
 
 from webui.components.wizard import build_wizard, wizard_defaults_updates
 
-from webui.helpers import audio_if_exists, project_choices, read_manifest_preview, save_reference_audio
+from webui.helpers import audio_if_exists, project_choices, read_manifest_preview, resolve_convert_preview_audio, save_reference_audio
 
 
 def _run_stage_stream(project_id, stage, params):
@@ -109,15 +111,19 @@ def _panel_updates(pid: str | None, panel: StageParamPanel) -> list:
 
 
 
-def _project_field_updates(pid: str | None, *panels: StageParamPanel) -> list:
+def _project_field_updates(
+    pid: str | None,
+    *panels: StageParamPanel,
+    slice_mode_override: str | None = None,
+) -> list:
 
     d = state.load_project_defaults(pid)
 
     if not d:
 
-        empty = [gr.update()] * 25
+        empty = [gr.update()] * 29
 
-        empty_wizard = [gr.update()] * 6
+        empty_wizard = [gr.update()] * 9
 
         return empty + empty_wizard + [u for panel in panels for u in _panel_updates(pid, panel)]
 
@@ -127,12 +133,8 @@ def _project_field_updates(pid: str | None, *panels: StageParamPanel) -> list:
 
     inst_p = paths.separated_instrumental_path(pid) if pid else None
 
-    full_p = paths.resolve_converted_full_track(pid) if pid else None
-    slice_mode = d.get("slice_mode", SLICE_VAD)
-    slices_p = (
-        paths.resolve_converted_mode_dir(pid, slice_mode) or paths.resolve_converted_slices_dir(pid)
-        if pid
-        else None
+    slice_mode = paths.normalize_slice_mode(
+        slice_mode_override or d.get("slice_mode", SLICE_VAD)
     )
     mixed_mode_path = paths.merged_mixed_path(pid, slice_mode) if pid else None
     legacy_mixed = paths.merged_dir(pid) / "mixed.flac" if pid else None
@@ -184,7 +186,7 @@ def _project_field_updates(pid: str | None, *panels: StageParamPanel) -> list:
 
         manifest_preview,
 
-        audio_if_exists(str(full_p) if full_p and full_p.is_file() else None),
+        resolve_convert_preview_audio(pid, convert_mode, slice_mode),
 
         audio_if_exists(mixed_p),
 
@@ -196,11 +198,19 @@ def _project_field_updates(pid: str | None, *panels: StageParamPanel) -> list:
 
         slice_mode,
 
+        slice_mode,
+
+        gr.update(visible=slice_mode == SLICE_VAD),
+
+        gr.update(visible=slice_mode == SLICE_LRC),
+
+        tab_index_for_mode(convert_mode, CONVERT_MODES),
+
+        tab_index_for_mode(MERGE_WHOLE, [MERGE_WHOLE, MERGE_SLICE]),
+
         tabs_selected_update(MERGE_WHOLE, [MERGE_WHOLE, MERGE_SLICE]),
 
         tabs_selected_update(convert_mode, CONVERT_MODES),
-
-        tabs_selected_update(slice_mode, SLICE_MODES),
 
     ]
 
@@ -336,35 +346,39 @@ def build_app() -> gr.Blocks:
 
                         slice_mode = gr.State(SLICE_VAD)
 
-                        with gr.Tabs(selected=0) as slice_subtabs:
+                        slice_mode_radio = gr.Radio(
+                            choices=[(SLICE_TAB_LABELS[0], SLICE_VAD), (SLICE_TAB_LABELS[1], SLICE_LRC)],
+                            value=SLICE_VAD,
+                            label="断句模式",
+                        )
 
-                            with gr.Tab(SLICE_TAB_LABELS[0], id="slice_vad") as slice_vad_tab:
+                        with gr.Column(visible=True) as slice_vad_column:
 
-                                gr.Markdown(
+                            gr.Markdown(
 
-                                    "无歌词时按语音活动检测（VAD）自动断句。"
+                                "无歌词时按语音活动检测（VAD）自动断句。"
 
-                                    " 可在下方高级参数中调节灵敏度与最短片段长度。"
+                                " 可在下方高级参数中调节灵敏度与最短片段长度。"
 
-                                )
+                            )
 
-                                slice_vad_params = build_stage_param_panel(
+                            slice_vad_params = build_stage_param_panel(
 
-                                    StageName.SLICE,
+                                StageName.SLICE,
 
-                                    vad_only=True,
+                                vad_only=True,
 
-                                    accordion_label="VAD 高级参数",
+                                accordion_label="VAD 高级参数",
 
-                                )
+                            )
 
-                            with gr.Tab(SLICE_TAB_LABELS[1], id="slice_lrc") as slice_lrc_tab:
+                        with gr.Column(visible=False) as slice_lrc_column:
 
-                                gr.Markdown("有 LRC 歌词时按歌词时间轴断句，切分更贴合语义。")
+                            gr.Markdown("有 LRC 歌词时按歌词时间轴断句，切分更贴合语义。")
 
-                                slice_lrc_input = PathInput.build("LRC 路径", file_types=[".lrc"])
+                            slice_lrc_input = PathInput.build("LRC 路径", file_types=[".lrc"])
 
-                                slice_lrc = slice_lrc_input.text
+                            slice_lrc = slice_lrc_input.text
 
                         slice_run = gr.Button("运行切片", variant="primary")
 
@@ -379,6 +393,7 @@ def build_app() -> gr.Blocks:
                     with gr.Tab("转换"):
 
                         convert_mode = gr.State(CONVERT_BATCH)
+                        convert_tab_index = gr.State(0)
 
                         with gr.Tabs(selected=0) as convert_subtabs:
 
@@ -445,6 +460,7 @@ def build_app() -> gr.Blocks:
                         )
 
                         merge_mode = gr.State(MERGE_WHOLE)
+                        merge_tab_index = gr.State(0)
 
                         with gr.Tabs(selected=0) as merge_subtabs:
 
@@ -560,29 +576,53 @@ def build_app() -> gr.Blocks:
 
         wire_mode_tabs(
 
-            [(slice_vad_tab, SLICE_VAD), (slice_lrc_tab, SLICE_LRC)],
-
-            slice_mode,
-
-        )
-
-        wire_mode_tabs(
-
             [(convert_batch_tab, CONVERT_BATCH), (convert_full_tab, CONVERT_FULL)],
 
             convert_mode,
 
+            tabs=convert_subtabs,
+
+            index_state=convert_tab_index,
+
+        )
+
+        def _sync_slice_mode(mode: str):
+            is_vad = mode == SLICE_VAD
+            return mode, gr.update(visible=is_vad), gr.update(visible=not is_vad)
+
+        slice_mode_radio.change(
+            _sync_slice_mode,
+            inputs=[slice_mode_radio],
+            outputs=[slice_mode, slice_vad_column, slice_lrc_column],
         )
 
         wire_slice_tuner(slice_tuner, project_state, slice_mode)
 
-        wire_slice_preview(slice_preview, project_state, slice_mode)
+        wire_slice_preview(slice_preview, project_state, slice_mode_radio)
+
+        def _update_convert_preview(pid: str | None, cmode: str, smode: str):
+            return resolve_convert_preview_audio(pid, cmode, smode)
+
+        convert_mode.change(
+            _update_convert_preview,
+            inputs=[project_state, convert_mode, slice_mode],
+            outputs=[convert_out],
+        )
+        slice_mode.change(
+            _update_convert_preview,
+            inputs=[project_state, convert_mode, slice_mode],
+            outputs=[convert_out],
+        )
 
         wire_mode_tabs(
 
             [(merge_whole_tab, MERGE_WHOLE), (merge_slice_tab, MERGE_SLICE)],
 
             merge_mode,
+
+            tabs=merge_subtabs,
+
+            index_state=merge_tab_index,
 
         )
 
@@ -650,11 +690,19 @@ def build_app() -> gr.Blocks:
 
             slice_mode,
 
+            slice_mode_radio,
+
+            slice_vad_column,
+
+            slice_lrc_column,
+
+            convert_tab_index,
+
+            merge_tab_index,
+
             merge_subtabs,
 
             convert_subtabs,
-
-            slice_subtabs,
 
             *wizard_bundle.field_outputs(),
 
@@ -756,7 +804,11 @@ def build_app() -> gr.Blocks:
 
         def run_slice(pid, vocals, mode, lrc, *param_values):
 
+            mode = paths.normalize_slice_mode(mode)
+
             params = {"vocals": vocals, "mode": mode, "lrc": lrc if mode == SLICE_LRC else ""}
+            if pid:
+                params["output_dir"] = str(paths.slices_mode_dir(pid, mode))
 
             params.update(
 
@@ -772,7 +824,20 @@ def build_app() -> gr.Blocks:
 
             )
 
-            yield from _run_stage_stream(pid, StageName.SLICE.value, params)
+            config_line = (
+                f"[配置] mode={mode} vad_threshold={params.get('vad_threshold', '-')} "
+                f"min_speech_ms={params.get('min_speech_ms', '-')} "
+                f"min_silence_ms={params.get('min_silence_ms', '-')} "
+                f"speech_pad_ms={params.get('speech_pad_ms', '-')}"
+            )
+
+            yield config_line, "运行中..."
+
+            log_lines = [config_line]
+            for log, st in _run_stage_stream(pid, StageName.SLICE.value, params):
+                if log:
+                    log_lines.extend(line for line in log.split("\n") if line)
+                yield "\n".join(log_lines[-80:]), st
 
 
 
@@ -786,7 +851,7 @@ def build_app() -> gr.Blocks:
 
                 slice_vocals,
 
-                slice_mode,
+                slice_mode_radio,
 
                 slice_lrc,
 
@@ -798,9 +863,11 @@ def build_app() -> gr.Blocks:
 
         ).then(
 
-            lambda pid: _project_field_updates(pid, *param_panels),
+            lambda pid, mode: _project_field_updates(
+                pid, *param_panels, slice_mode_override=mode
+            ),
 
-            inputs=[project_state],
+            inputs=[project_state, slice_mode_radio],
 
             outputs=field_outputs,
 
@@ -808,7 +875,9 @@ def build_app() -> gr.Blocks:
 
 
 
-        def run_convert(pid, mode, source, sdir, ref, slice_mode_val, *param_values):
+        def run_convert(pid, cmode, source, sdir, ref, slice_mode_val, *param_values):
+
+            mode = cmode if cmode in CONVERT_MODES else CONVERT_BATCH
 
             reference = save_reference_audio(pid, ref) if pid and ref else ref
 
@@ -868,7 +937,7 @@ def build_app() -> gr.Blocks:
 
                 convert_ref,
 
-                slice_mode,
+                slice_mode_radio,
 
                 *convert_params.input_components(),
 
@@ -890,7 +959,7 @@ def build_app() -> gr.Blocks:
 
         def run_merge(
             pid,
-            mode,
+            merge_mode_val,
             vocals_file,
             vocals_dir,
             inst,
@@ -898,6 +967,8 @@ def build_app() -> gr.Blocks:
             profile,
             *param_values,
         ):
+
+            mode = merge_mode_val if merge_mode_val in MERGE_MODES else MERGE_WHOLE
 
             vocals = vocals_file if mode == MERGE_WHOLE else vocals_dir
 

@@ -24,6 +24,7 @@ from webui.components.mode_panel import (
     tabs_selected_update,
     wire_mode_tabs,
 )
+from webui.mode_utils import mode_from_tab_index, tab_index_for_mode
 from webui.components.stage_params import StageParamPanel, build_wizard_param_panels
 from webui.helpers import audio_if_exists, save_reference_audio
 
@@ -43,6 +44,9 @@ class WizardBundle:
     slice_mode: gr.State
     convert_mode: gr.State
     merge_mode: gr.State
+    slice_tab_index: gr.State
+    convert_tab_index: gr.State
+    merge_tab_index: gr.State
     slice_subtabs: gr.Tabs
     convert_subtabs: gr.Tabs
     merge_subtabs: gr.Tabs
@@ -72,6 +76,7 @@ def build_wizard(project_state: gr.State) -> WizardBundle:
 
     gr.Markdown("### 切片模式")
     slice_mode = gr.State(SLICE_VAD)
+    slice_tab_index = gr.State(0)
     with gr.Tabs(selected=0) as slice_subtabs:
         with gr.Tab(SLICE_TAB_LABELS[0], id="wiz_slice_vad") as wiz_slice_vad_tab:
             gr.Markdown("无歌词时按 VAD 自动断句。")
@@ -80,6 +85,7 @@ def build_wizard(project_state: gr.State) -> WizardBundle:
 
     gr.Markdown("### 转换模式")
     convert_mode = gr.State(CONVERT_BATCH)
+    convert_tab_index = gr.State(0)
     with gr.Tabs(selected=0) as convert_subtabs:
         with gr.Tab("切片批量", id="wiz_convert_batch") as wiz_convert_batch_tab:
             gr.Markdown("对每个切片批量执行歌声转换（推荐）。")
@@ -90,6 +96,7 @@ def build_wizard(project_state: gr.State) -> WizardBundle:
 
     gr.Markdown("### 合并模式")
     merge_mode = gr.State(MERGE_WHOLE)
+    merge_tab_index = gr.State(0)
     with gr.Tabs(selected=0) as merge_subtabs:
         with gr.Tab("整轨合并", id="wiz_merge_whole") as wiz_merge_whole_tab:
             gr.Markdown(MERGE_WHOLE_HELP)
@@ -114,6 +121,9 @@ def build_wizard(project_state: gr.State) -> WizardBundle:
         slice_mode=slice_mode,
         convert_mode=convert_mode,
         merge_mode=merge_mode,
+        slice_tab_index=slice_tab_index,
+        convert_tab_index=convert_tab_index,
+        merge_tab_index=merge_tab_index,
         slice_subtabs=slice_subtabs,
         convert_subtabs=convert_subtabs,
         merge_subtabs=merge_subtabs,
@@ -129,6 +139,9 @@ def build_wizard(project_state: gr.State) -> WizardBundle:
             slice_mode,
             convert_mode,
             merge_mode,
+            slice_tab_index,
+            convert_tab_index,
+            merge_tab_index,
             slice_subtabs,
             convert_subtabs,
             merge_subtabs,
@@ -138,14 +151,20 @@ def build_wizard(project_state: gr.State) -> WizardBundle:
     wire_mode_tabs(
         [(wiz_slice_vad_tab, SLICE_VAD), (wiz_slice_lrc_tab, SLICE_LRC)],
         slice_mode,
+        tabs=slice_subtabs,
+        index_state=slice_tab_index,
     )
     wire_mode_tabs(
         [(wiz_convert_batch_tab, CONVERT_BATCH), (wiz_convert_full_tab, CONVERT_FULL)],
         convert_mode,
+        tabs=convert_subtabs,
+        index_state=convert_tab_index,
     )
     wire_mode_tabs(
         [(wiz_merge_whole_tab, MERGE_WHOLE), (wiz_merge_slice_tab, MERGE_SLICE)],
         merge_mode,
+        tabs=merge_subtabs,
+        index_state=merge_tab_index,
     )
 
     wire_wizard(project_state, bundle)
@@ -160,6 +179,9 @@ def wizard_defaults_updates(d: dict) -> list:
         slice_mode,
         convert_mode,
         MERGE_WHOLE,
+        tab_index_for_mode(slice_mode, SLICE_MODES),
+        tab_index_for_mode(convert_mode, CONVERT_MODES),
+        tab_index_for_mode(MERGE_WHOLE, [MERGE_WHOLE, MERGE_SLICE]),
         tabs_selected_update(slice_mode, SLICE_MODES),
         tabs_selected_update(convert_mode, CONVERT_MODES),
         tabs_selected_update(MERGE_WHOLE, [MERGE_WHOLE, MERGE_SLICE]),
@@ -231,34 +253,40 @@ def wire_wizard(project_state: gr.State, bundle: WizardBundle) -> None:
     wizard_inputs = [
         project_state,
         bundle.step,
-        bundle.convert_mode,
-        bundle.slice_mode,
+        bundle.convert_tab_index,
+        bundle.slice_tab_index,
         bundle.reference,
         bundle.merge_profile,
-        bundle.merge_mode,
+        bundle.merge_tab_index,
         *bundle.wizard_panel.input_components(),
     ]
 
-    def _run_one(pid, step_label, cmode, smode, ref, profile, merge_mode, *param_values):
+    def _run_one(pid, step_label, convert_tab_index, slice_tab_index, ref, profile, merge_tab_index, *param_values):
         if not pid:
             yield "", "请先选择项目", None
             return
+        cmode = mode_from_tab_index(convert_tab_index, CONVERT_MODES, CONVERT_BATCH)
+        smode = mode_from_tab_index(slice_tab_index, SLICE_MODES, SLICE_VAD)
+        merge_mode_val = mode_from_tab_index(merge_tab_index, [MERGE_WHOLE, MERGE_SLICE], MERGE_WHOLE)
         stage = _stage_from_label(step_label)
         wizard_values = bundle.wizard_panel.values_to_dict(*param_values)
-        runtime = _wizard_runtime_params(pid, cmode, smode, ref, profile, merge_mode, wizard_values)
+        runtime = _wizard_runtime_params(pid, cmode, smode, ref, profile, merge_mode_val, wizard_values)
         params = _stage_params_for_step(stage, runtime, smode)
         text, st = "", ""
         for text, st in state.run_stage_ui(pid, stage.value, params):
             yield text, st, None
         yield text, st, audio_if_exists(str(paths_merged(pid)))
 
-    def _run_from(pid, step_label, cmode, smode, ref, profile, merge_mode, *param_values):
+    def _run_from(pid, step_label, convert_tab_index, slice_tab_index, ref, profile, merge_tab_index, *param_values):
         if not pid:
             yield "", "请先选择项目", None
             return
+        cmode = mode_from_tab_index(convert_tab_index, CONVERT_MODES, CONVERT_BATCH)
+        smode = mode_from_tab_index(slice_tab_index, SLICE_MODES, SLICE_VAD)
+        merge_mode_val = mode_from_tab_index(merge_tab_index, [MERGE_WHOLE, MERGE_SLICE], MERGE_WHOLE)
         from_stage = _stage_from_label(step_label)
         wizard_values = bundle.wizard_panel.values_to_dict(*param_values)
-        params = _wizard_runtime_params(pid, cmode, smode, ref, profile, merge_mode, wizard_values)
+        params = _wizard_runtime_params(pid, cmode, smode, ref, profile, merge_mode_val, wizard_values)
         text, st = "", ""
         for text, st in state.run_pipeline_ui(
             pid,
@@ -270,12 +298,15 @@ def wire_wizard(project_state: gr.State, bundle: WizardBundle) -> None:
             yield text, st, None
         yield text, st, audio_if_exists(str(paths_merged(pid)))
 
-    def _run_all(pid, cmode, smode, ref, profile, merge_mode, *param_values):
+    def _run_all(pid, convert_tab_index, slice_tab_index, ref, profile, merge_tab_index, *param_values):
         if not pid:
             yield "", "请先选择项目", None
             return
+        cmode = mode_from_tab_index(convert_tab_index, CONVERT_MODES, CONVERT_BATCH)
+        smode = mode_from_tab_index(slice_tab_index, SLICE_MODES, SLICE_VAD)
+        merge_mode_val = mode_from_tab_index(merge_tab_index, [MERGE_WHOLE, MERGE_SLICE], MERGE_WHOLE)
         wizard_values = bundle.wizard_panel.values_to_dict(*param_values)
-        params = _wizard_runtime_params(pid, cmode, smode, ref, profile, merge_mode, wizard_values)
+        params = _wizard_runtime_params(pid, cmode, smode, ref, profile, merge_mode_val, wizard_values)
         text, st = "", ""
         for text, st in state.run_pipeline_ui(pid, convert_mode=cmode, slice_mode=smode, params=params):
             yield text, st, None

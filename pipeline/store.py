@@ -311,7 +311,7 @@ class ProjectStore:
             mode_val = overrides.get("mode")
             if mode_val in paths.SLICE_MODES:
                 return paths.normalize_slice_mode(str(mode_val))
-        for stage in (StageName.CONVERT, StageName.MERGE, StageName.SLICE):
+        for stage in (StageName.SLICE, StageName.CONVERT, StageName.MERGE):
             params = project.stages[stage].params
             if params.get("active_slice_mode"):
                 return paths.normalize_slice_mode(str(params["active_slice_mode"]))

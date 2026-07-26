@@ -45,7 +45,15 @@ class StageRunner:
         stage: StageName,
         params: dict | None = None,
         on_progress: Callable[[ProgressEvent], None] | None = None,
+        on_job_id: Callable[[str], None] | None = None,
     ) -> StageResult:
+        """Run *stage* synchronously (blocks until the GPU queue completes it).
+
+        ``on_job_id`` (optional) is invoked with the generated job id as soon as
+        it is known — before the run is enqueued — so callers that need to
+        cancel a still-running job (e.g. an HTTP layer detecting client
+        disconnect) have something to pass to :meth:`cancel`.
+        """
         params = dict(params or {})
         inputs = self.store.resolve_stage_inputs(project_id, stage, params)
         ok, errors = self.store.validate_stage_inputs(stage, inputs)
@@ -54,6 +62,8 @@ class StageRunner:
 
         self.store.save_stage_inputs(project_id, stage, inputs)
         job_id = self.queue.new_job_id(stage.value)
+        if on_job_id is not None:
+            on_job_id(job_id)
         log_path = paths.project_logs_dir(project_id) / f"{job_id}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -163,6 +173,19 @@ class StageRunner:
                     return PipelineResult(project_id, False, stage_results=results, error=result.error)
         return PipelineResult(project_id, True, stage_results=results)
 
+    def cancel(self, job_id: str) -> bool:
+        """Cancel a running stage job.
+
+        Returns True if *job_id* was RUNNING and cancellation was requested
+        (the underlying subprocess, if any, is sent ``terminate()``/``kill()``).
+        Returns False if the job is unknown, already finished, or still QUEUED
+        (queued-but-not-started jobs should use :meth:`GpuJobQueue.cancel`
+        instead, which simply drops them before they start).
+        """
+        if self.queue.get_status(job_id) != JobStatus.RUNNING:
+            return False
+        return self.queue.cancel_current()
+
     def _publish_progress(self, job_id: str, event: ProgressEvent) -> None:
         q = self._progress_subscribers.get(job_id)
         if q is not None:
@@ -204,7 +227,7 @@ class StageRunner:
 
         if stage == StageName.SLICE:
             vocals = _abs("vocals")
-            mode = inputs.get("mode") or params.get("mode", SliceMode.VAD.value)
+            mode = params.get("mode") or inputs.get("mode", SliceMode.VAD.value)
             slice_mode = paths.normalize_slice_mode(mode)
             out_dir = _abs("output_dir") or paths.slices_mode_dir(project_id, slice_mode)
             assert vocals is not None
@@ -248,7 +271,7 @@ class StageRunner:
             }
 
         if stage == StageName.CONVERT:
-            mode = inputs.get("mode") or params.get("mode", ConvertMode.SLICE_BATCH.value)
+            mode = params.get("mode") or inputs.get("mode", ConvertMode.SLICE_BATCH.value)
             slice_mode = paths.normalize_slice_mode(
                 inputs.get("slice_mode") or params.get("active_slice_mode") or params.get("slice_mode")
             )
