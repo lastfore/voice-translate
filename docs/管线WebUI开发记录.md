@@ -1,5 +1,7 @@
 # 管线 Web UI 开发记录
 
+> **[已废弃]** 管线 Gradio UI 已于 2026-07-26 移除，现使用 FastAPI + React（`api/` + `frontend/`）。本文记录 Gradio 时代的开发历程，仅作历史参考。
+
 > 对应设计文档：[管线WebUI设计方案.md](./管线WebUI设计方案.md)  
 > 每完成一个 Phase 在本文件追加记录，不等到全部完工再写。
 

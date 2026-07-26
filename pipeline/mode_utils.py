@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 def mode_from_tab_index(index: int | float | str | None, modes: list[str], default: str) -> str:
-    """Map a Gradio Tabs selected index to a mode string."""
+    """Map a tab selected index to a mode string."""
     try:
         return modes[int(index)]
     except (TypeError, ValueError, IndexError):

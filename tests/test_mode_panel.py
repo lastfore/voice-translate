@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from webui.mode_utils import mode_from_tab_index, tab_index_for_mode
+from pipeline.mode_utils import mode_from_tab_index, tab_index_for_mode
 
 
 def test_mode_from_tab_index_maps_valid_indices() -> None:

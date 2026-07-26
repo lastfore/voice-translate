@@ -1,6 +1,6 @@
 # voice-translate
 
-基于 [Seed-VC](https://github.com/Plachtaa/seed-vc) 的本地语音/歌声转换工作区，包含 Seed-VC 源码（含 Web UI 报错增强）、词曲分离/切片/重组脚本、**统一管线 Web UI** 与安装文档。
+基于 [Seed-VC](https://github.com/Plachtaa/seed-vc) 的本地语音/歌声转换工作区，包含 Seed-VC 源码（含 Web UI 报错增强）、词曲分离/切片/重组脚本、**FastAPI + React 管线 Web UI** 与安装文档。
 
 > 上游参考：Plachta/seed-vc。模型权重不纳入版本库，首次运行时会自动下载到 `seed-vc/checkpoints/`。
 
@@ -10,7 +10,8 @@
 | --- | --- |
 | `docs/` | 安装与排障文档 |
 | `pipeline/` | 编排内核（项目状态、阶段调度、GPU 队列） |
-| `webui/` | 统一管线 Gradio Web UI |
+| `api/` | FastAPI 后端（项目 CRUD、阶段 SSE、媒体服务） |
+| `frontend/` | React 管线 Web UI（Vite + TypeScript） |
 | `scripts/` | 管线脚本（分离、切片、转换、重组、Web UI 启动） |
 | `seed-vc/` | Seed-VC 源码（已纳入版本库，模型权重除外） |
 | `separator-env/` | 词曲分离与切片 Python 环境（不纳入版本库） |
@@ -51,16 +52,17 @@ flowchart LR
 1. 完成 [词曲分离与声乐切片安装指南](docs/词曲分离与声乐切片安装指南.md)（`separator-env`）
 2. 完成 [Seed-VC 安装指南](docs/Seed-VC安装指南.md)（`seed-vc-env`）
 3. 安装 **FFmpeg** 并确保 `ffmpeg` 在 PATH 中可用
-4. 启动：
+4. 安装 Node.js 18+，并在 `frontend/` 执行 `npm install`（首次）
+5. 启动：
 
 ```powershell
-scripts\start-pipeline-webui.bat
+scripts\start-pipeline-web.bat
 ```
 
-5. 浏览器访问 `http://127.0.0.1:7860/`
-6. 关闭：`scripts\stop-pipeline-webui.bat`
+6. 浏览器访问 `http://127.0.0.1:5173/`（API 在 `http://127.0.0.1:8000/`）
+7. 关闭：`scripts\stop-pipeline-web.bat`
 
-设计说明见 [管线 Web UI 设计方案](docs/管线WebUI设计方案.md)。已有 `output/slices/`、`output/separated/` 等目录时，侧栏点「刷新列表」可自动导入为项目。
+设计说明见 [管线 Web UI 设计方案](docs/管线WebUI设计方案.md)（历史参考）。已有 `output/slices/`、`output/separated/` 等目录时，侧栏点「刷新列表」可自动导入为项目。
 
 ### Seed-VC 调试 Web UI（仅歌声转换）
 
@@ -70,7 +72,7 @@ scripts\start-pipeline-webui.bat
 scripts\start-seed-vc-webui.bat
 ```
 
-> 与管线 Web UI 共用 **7860** 端口，请勿同时启动。
+> Seed-VC 调试 UI 使用 **7860** 端口，与管线 Web UI（5173）互不冲突。
 
 ### 命令行管线（批量处理）
 
@@ -94,8 +96,10 @@ scripts\merge-audio.bat `
 
 | 脚本 | 说明 |
 | --- | --- |
-| `scripts/start-pipeline-webui.bat` | **启动统一管线 Web UI** |
-| `scripts/stop-pipeline-webui.bat` | 关闭管线 Web UI |
+| `scripts/start-pipeline-web.bat` | **启动 FastAPI + React 管线 Web UI** |
+| `scripts/stop-pipeline-web.bat` | 关闭管线 Web UI（API + 前端） |
+| `scripts/start-pipeline-api.bat` | 仅启动 FastAPI 后端 |
+| `scripts/stop-pipeline-api.bat` | 关闭 FastAPI 后端 |
 | `scripts/separate-audio.bat` | 词曲分离 |
 | `scripts/process-song.bat` | 词曲分离 + LRC 切片 |
 | `scripts/slice-vocals.bat` | Silero VAD 声学切片 |
@@ -110,10 +114,11 @@ scripts\merge-audio.bat `
 
 ```powershell
 py -m pytest tests/ -v
+cd frontend; npx playwright test --project=chromium
 ```
 
 ## 本地定制
 
 - `seed-vc/app_svc.py`：已增强 Web UI 报错提示（如 FFmpeg 缺失、文件不存在等）
-- `pipeline/` + `webui/`：统一管线编排与 Gradio 界面
+- `pipeline/` + `api/` + `frontend/`：统一管线编排与 Web 界面
 - 详见各安装指南与 [管线 Web UI 开发记录](docs/管线WebUI开发记录.md)

@@ -21,7 +21,7 @@
 | `webui/helpers.py` | **拆分** | 路径/音频逻辑 → API；格式化 → 前端 `lib/format.ts` |
 | `webui/components/*.py` | **替换** | 每个模块映射到 React 页面/组件 + FastAPI 路由 |
 | `webui/pipeline_app.py` | **废弃** | 由 `frontend/src/App.tsx` + `api/main.py` 取代 |
-| `webui/` 整目录 | **Phase 0 起冻结只读** | 不再修 bug、不接新需求；两套 UI 共用 `output/.projects/`，新 API 不得改动 store schema；Phase 4 删除 |
+| `webui/` 整目录 | **已删除（2026-07-26）** | 逻辑已迁入 `api/` + `frontend/` |
 
 ### 1.2 设计原则
 
@@ -877,11 +877,11 @@ return (
 
 ### Phase 4 — 收尾（约 3–4 天）
 
-- [ ] `scripts/start-pipeline-web.bat` 一键启动
-- [ ] 更新 README、删除 `webui/`（Phase 0 起已冻结只读）
-- [ ] Playwright E2E（可复用现有测试方案文档）
-- [ ] 性能：切片表虚拟滚动、SSE 日志截断（对齐现 80 行）
-- [ ] 大文件上传改流式（§11 风险表）
+- [x] `scripts/start-pipeline-web.bat` 一键启动
+- [x] 更新 README、删除 `webui/`（2026-07-26 完成，见 `docs/Gradio管线UI安全删除计划.md`）
+- [x] Playwright E2E（可复用现有测试方案文档）
+- [x] 性能：切片表虚拟滚动、SSE 日志截断（对齐现 80 行）
+- [x] 大文件上传改流式（§11 风险表）
 
 **预估总工时：约 27–36 人天（1 人全职 6–8 周）**
 
@@ -918,7 +918,7 @@ return (
 | 多 worker 破坏 GPU 队列单例 | **`uvicorn --workers 1` 强制**；`scripts/start-pipeline-api.bat` 固定参数；生产禁止 `--workers >1`。多 worker 需迁外部队列（Redis/文件锁），不在本期范围 |
 | 子进程孤儿（关页面/刷新） | 客户端断开 → `runner.cancel(job_id)` → `GpuJobQueue.cancel_current()` → 子进程 `terminate()`（5s 后 `kill()`）；GPU 显存释放在 Phase 0 验证 |
 | 双 venv 子进程 | 保持在 `pipeline/runner.py` + `pipeline/venv_runner.py`，API 层不触碰子进程句柄 |
-| 迁移期间两套 UI 并存 | Phase 0 起 `webui/` 标记 deprecated **只读**：不再修 bug、不再接新需求；两套 UI 共用 `output/.projects/`，新 API 不得改动 store schema；Gradio 暂留 `7860` 直至 Phase 4 删除 |
+| 迁移期间两套 UI 并存 | **已解决（2026-07-26）：** 管线 Gradio UI（`webui/`）已删除；7860 仅 Seed-VC 调试 UI 使用 |
 | 前端类型与 Python schema 漂移 | `stage_params` 由 API 动态返回；schema 端点后端 `lru_cache`、前端 `staleTime: Infinity`（见 §5.2）。可选后续用 `openapi-typescript` 生成 Pydantic 模型类型（schema 自定义格式需手写映射） |
 | 大文件上传占内存 | `AudioUpload` 改用流式 multipart 或先落临时文件再 `save_upload`；几百 MB flac 不应整块读入内存 |
 

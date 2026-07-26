@@ -110,6 +110,30 @@ def test_defaults_not_found_is_404(api_workspace) -> None:
     assert resp.status_code == 404
 
 
+def test_defaults_prefers_slice_stage_mode(api_workspace) -> None:
+    """slice_mode comes from SLICE stage params, not CONVERT active_slice_mode."""
+    from pipeline.models import Project, StageName, StageRecord, StageStatus, utc_now_iso
+    from pipeline.store import ProjectStore
+
+    store = ProjectStore(api_workspace.root)
+    now = utc_now_iso()
+    project = Project(id="demo", display_name="demo", created_at=now, updated_at=now)
+    project.stages[StageName.SLICE] = StageRecord(
+        status=StageStatus.DONE,
+        params={"mode": "vad", "active_slice_mode": "vad"},
+    )
+    project.stages[StageName.CONVERT] = StageRecord(
+        status=StageStatus.DONE,
+        params={"active_slice_mode": "lrc"},
+    )
+    store.save_project(project)
+
+    client = TestClient(api_workspace.app)
+    resp = client.get("/api/projects/demo/defaults")
+    assert resp.status_code == 200
+    assert resp.json()["slice_mode"] == "vad"
+
+
 def test_delete_requires_confirmation(api_workspace, sample_audio: Path) -> None:
     client = TestClient(api_workspace.app)
     with sample_audio.open("rb") as fh:

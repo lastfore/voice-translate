@@ -244,10 +244,10 @@
   - 执行人：Agent　执行日期：2026-07-26　结果：通过
   - 证据：`npx playwright test --project=chromium` → `14 passed`（含新增 `separate-page.spec.ts`、`stage-cancel-on-leave.spec.ts`）
   - 备注：覆盖 project switch、separate run/backfill、stage cancel、slice page、convert/merge、slice tuner、reference upload、wizard、batch queue、log truncation、slice table performance。
-- [x] `TC-Phase4-03` 双 UI 并存兼容，不破坏 store schema【`手工`】
+- [x] `TC-Phase4-03` Gradio 管线 UI 已移除，store schema 未破坏【`手工`】
   - 执行人：Agent　执行日期：2026-07-26　结果：通过
-  - 证据：FastAPI 路由为增量新增，未修改 `pipeline/store.py` 序列化逻辑；`output/.projects` 目录结构可读，`Project.to_summary()` 字段完整；React UI 与 API 对同一项目 CRUD/defaults 正常。
-  - 备注：旧 Gradio UI 同项目交叉操作仍建议发布前人工抽测一次。
+  - 证据：`webui/` 目录已删除；FastAPI + React 对 `output/.projects` 读写正常；`test_defaults_prefers_slice_stage_mode` 验证 defaults 逻辑。
+  - 备注：7860 端口现仅 Seed-VC 调试 UI 使用。
 - [x] `TC-Phase4-04` 切片表性能优化达标【`Playwright`】
   - 执行人：Agent　执行日期：2026-07-26　结果：通过
   - 证据：`npx playwright test --project=chromium e2e/slice-table-performance.spec.ts` → `slice table handles 150 rows` passed
@@ -327,7 +327,7 @@
   - `TC-P2-01`：5 MiB multipart 上传 201
   - `TC-P2-02`：断连后重试第二次 run 成功（MCP mock abort + retry）
   - `TC-P2-03`、`TC-P2-04`：Playwright 通过
-  - `TC-P2-05`：store schema 未破坏（API/React 同项目读写正常）
+  - `TC-P2-05`：Gradio 已移除，store schema 未破坏（API/React 同项目读写正常）
   - `TC-P2-06`：`pytest` 400/404/409 可观测性覆盖
 
 ### 7.3 阻断项清单

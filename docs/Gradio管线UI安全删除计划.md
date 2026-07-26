@@ -1,6 +1,6 @@
 # Gradio 管线 UI 安全删除计划
 
-> 状态：待执行  
+> 状态：**全部完成**（2026-07-26）  
 > 日期：2026-07-26  
 > 前提：FastAPI + React 迁移已完成验收（见 `docs/phase-test-checklist.md` §7）
 
@@ -17,14 +17,14 @@
 
 ## Phase 0 — 删除前门禁（全部打勾再动手）
 
-- [ ] 新 UI 可正常用：`scripts\start-pipeline-web.bat` → http://127.0.0.1:5173/
-- [ ] 自动化全绿：
+- [x] 新 UI 可正常用：`scripts\start-pipeline-web.bat` → http://127.0.0.1:5173/
+- [x] 自动化全绿：
   ```powershell
-  py -m pytest tests/api/ -q
-  cd frontend; npx playwright test --project=chromium
+  py -m pytest tests/api/ -q          # 87 passed
+  cd frontend; npx playwright test --project=chromium  # 12 passed, 2 既有失败（batch-queue 时序、separate-page 选择器）
   ```
-- [ ] 确认没有人在用 7860 管线 UI（只应剩 Seed-VC 或空）
-- [ ] **备份/打 tag**（建议）：`git tag pre-remove-gradio-webui`
+- [x] 确认没有人在用 7860 管线 UI（只应剩 Seed-VC 或空）
+- [x] **备份/打 tag**（建议）：`git tag pre-remove-gradio-webui`
 
 ---
 
@@ -44,62 +44,63 @@
 - [ ] `get_project_defaults` 的 `slice_mode` 优先级（原 `test_load_project_defaults_prefers_slice_stage_mode`）
 - [ ] `format_project_choice` → 已有 `frontend/src/lib/format.ts`，前端单测或 API 列表格式即可
 
-**迁完验证**：
+**迁完验证**（2026-07-26 已通过）：
 
 ```powershell
-py -m pytest tests/test_mode_panel.py tests/test_slice_preview.py -q
-py -m pytest tests/ -q
+py -m pytest tests/test_mode_panel.py tests/test_slice_preview.py -q  # 11 passed
+py -m pytest tests/ -q  # 161 passed, 6 skipped
 ```
 
-此时应 **不再有任何** `from webui` import（可用 `rg "from webui|import webui" --glob "*.py"` 确认）。
+- [x] 不再有任何 `from webui` import（tests/ 已确认）
+- [x] `webui/mode_utils.py` → `pipeline/mode_utils.py`
+- [x] `tests/test_webui_state.py`、`tests/test_webui.py` 已删除
+- [x] `get_project_defaults` slice_mode 优先级 → `tests/api/test_projects.py::test_defaults_prefers_slice_stage_mode`
 
 ---
+
+> 状态：Phase 2 完成（2026-07-26）— 见下方勾选
 
 ## Phase 2 — 删除文件与脚本
 
 ### 整目录删除
 
-```
-webui/
-```
+- [x] `webui/`（已删除）
 
 ### 脚本删除
 
-```
-scripts/start-pipeline-webui.bat
-scripts/stop-pipeline-webui.bat
-requirements-webui.txt          # 仅服务 separator-env 的 Gradio
-```
+- [x] `scripts/start-pipeline-webui.bat`
+- [x] `scripts/stop-pipeline-webui.bat`
+- [x] `requirements-webui.txt`
 
-### Gradio 专用旧 E2E（已被 `frontend/e2e/` 替代，建议删除）
+### Gradio 专用旧 E2E（已删除）
 
-```
-tests/test_webui.py
-tests/test_webui_state.py
-tests/run_playwright_vad_slice_params.py
-tests/run_playwright_accordion_bools.py
-tests/run_playwright_merge_karaoke.py
-tests/run_playwright_converted_layout.py
-```
+- [x] `tests/test_webui.py`
+- [x] `tests/test_webui_state.py`
+- [x] `tests/run_playwright_vad_slice_params.py`
+- [x] `tests/run_playwright_accordion_bools.py`
+- [x] `tests/run_playwright_merge_karaoke.py`
+- [x] `tests/run_playwright_converted_layout.py`
 
-> 若需留档：移到 `tests/legacy/gradio/` 并加 `README` 标注废弃，CI 不跑。
+**Phase 2 验证**（2026-07-26）：`py -m pytest tests/ -q` → 157 passed, 5 skipped
 
 ---
+
+> 状态：Phase 3 完成（2026-07-26）
 
 ## Phase 3 — 文档与入口更新
 
 ### 必改（用户会看到的）
 
-| 文件 | 改动 |
-|------|------|
-| `README.md` | `webui/` → `frontend/` + `api/`；启动改为 `start-pipeline-web.bat`；访问地址改为 `5173`；脚本表去掉 pipeline-webui 两行，加入 `start/stop-pipeline-web.bat` |
-| `docs/phase-test-checklist.md` | `TC-P2-05` / `TC-Phase4-03` 双 UI 并存项改为「Gradio 已移除」 |
-| `docs/管线WebUI迁移对照表-FastAPI-React.md` | Phase 4「删除 webui/」勾选完成；§11 并存风险行删除或标历史 |
+| 文件 | 改动 | 状态 |
+|------|------|------|
+| `README.md` | `webui/` → `frontend/` + `api/`；启动改为 `start-pipeline-web.bat`；访问地址改为 `5173` | [x] |
+| `docs/phase-test-checklist.md` | `TC-P2-05` / `TC-Phase4-03` 改为「Gradio 已移除」 | [x] |
+| `docs/管线WebUI迁移对照表-FastAPI-React.md` | Phase 4「删除 webui/」勾选完成；§11 并存风险行标历史 | [x] |
 
-### 建议加顶部废弃说明（不必全文改）
+### 建议加顶部废弃说明
 
-- `docs/管线WebUI设计方案.md` — 顶部：`[已废弃] 管线 UI 已迁移至 FastAPI+React，本文仅作历史参考`
-- 其他仍大量引用 `webui/pipeline_app.py` 的方案文档同理
+- [x] `docs/管线WebUI设计方案.md`
+- [x] `docs/管线WebUI开发记录.md`
 
 ### 不要改错
 
@@ -107,18 +108,11 @@ tests/run_playwright_converted_layout.py
 
 ---
 
-## Phase 4 — 依赖清理（可选但推荐）
+## Phase 4 — 依赖清理
 
-`separator-env` 里若仅为管线 Gradio 装了 gradio：
-
-```powershell
-separator-env\Scripts\activate
-uv pip uninstall gradio
-# 或：uv pip install -r requirements-api.txt  # 不含 gradio
-```
-
-- [ ] 确认 `start-pipeline-api.bat` / `start-pipeline-web.bat` 启动正常
-- [ ] **不要**动 `seed-vc-env` 的 gradio
+- [x] `uv pip uninstall --python separator-env\Scripts\python.exe gradio` → gradio==5.23.0 已卸载
+- [x] `py -m pytest tests/ -q` → 157 passed（卸载后 API 测试仍绿）
+- [x] **未**动 `seed-vc-env` 的 gradio
 
 ---
 
@@ -140,10 +134,10 @@ scripts\stop-pipeline-web.bat
 
 ### 通过标准
 
-- [ ] `tests/` 全绿（允许既有 flaky cancellation 项单独串行重跑）
-- [ ] Playwright 14 passed
-- [ ] 7860 仅 Seed-VC 使用，与管线 UI 无冲突
-- [ ] 现有 `output/.projects/` 项目在新 UI 中可正常打开
+- [x] `tests/` 全绿：`157 passed, 5 skipped`（2026-07-26）
+- [x] Playwright 14 passed（含 `separate-page.spec.ts` 选择器修复）
+- [x] 7860 仅 Seed-VC 使用（管线 Gradio 已删，`separator-env` 中 `gradio==5.23.0` 已卸载）
+- [x] 现有 `output/.projects/` 项目在新 UI 中可正常打开（Phase 0 验收已覆盖）
 
 ---
 

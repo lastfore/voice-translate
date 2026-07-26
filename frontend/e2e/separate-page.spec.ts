@@ -83,7 +83,7 @@ test('separate page run refreshes defaults and artifacts', async ({ page }) => {
   await expect(page.getByText('暂无产物')).toHaveCount(2)
 
   await page.getByTestId('stage-run-submit').click()
-  await expect(page.getByText('分离完成')).toBeVisible()
+  await expect(page.getByText('分离完成', { exact: true })).toBeVisible()
 
   await expect.poll(() => defaultsFetchCount).toBeGreaterThanOrEqual(2)
   const audioPlayers = page.getByTestId('artifact-audio')

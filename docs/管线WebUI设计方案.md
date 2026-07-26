@@ -1,5 +1,7 @@
 # 管线 Web UI 设计方案
 
+> **[已废弃]** 管线 UI 已迁移至 FastAPI + React（`api/` + `frontend/`），本文仅作历史参考。启动方式见根目录 `README.md` 与 `scripts/start-pipeline-web.bat`。
+
 > **方案选型：** 编排内核 + Gradio 薄壳（方案二）  
 > **版本：** v0.2  
 > **日期：** 2026-07-23  
