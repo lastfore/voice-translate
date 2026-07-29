@@ -71,17 +71,15 @@ function MergePageInner({ projectId, initialMode }: { projectId: string; initial
     if (instrumentalOverride.trim()) params.instrumental = instrumentalOverride.trim()
     if (referenceOverride.trim()) params.reference = referenceOverride.trim()
     params.profile = values.profile ?? defaults?.merge_profile ?? 'full'
-    const vocalsPath =
-      mode === MERGE_SLICE
-        ? vocalsOverride.trim() || defaults?.merge_vocals_dir || ''
-        : vocalsOverride.trim()
-    const inferredFromVocals =
-      mode === MERGE_SLICE && vocalsPath
+    if (mode === MERGE_SLICE) {
+      const vocalsPath = vocalsOverride.trim() || defaults?.merge_vocals_dir || ''
+      const inferredFromVocals = vocalsPath
         ? vocalsPath.replace(/\\/g, '/').match(/\/(lrc|vad)\/?(?:\/|$)/i)?.[1]?.toLowerCase()
         : null
-    const sliceMode = inferredFromVocals ?? defaults?.active_slice_mode ?? 'lrc'
-    params.slice_mode = sliceMode
-    params.active_slice_mode = sliceMode
+      const sliceMode = inferredFromVocals ?? defaults?.active_slice_mode ?? 'lrc'
+      params.slice_mode = sliceMode
+      params.active_slice_mode = sliceMode
+    }
     stageRun.run(params)
   }
 

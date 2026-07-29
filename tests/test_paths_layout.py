@@ -23,6 +23,7 @@ def test_mode_path_helpers(root: Path) -> None:
     assert paths.slices_mode_dir("song", "lrc") == root / "output" / "slices" / "song" / "lrc"
     assert paths.converted_mode_dir("song", "vad") == root / "output" / "converted" / "song" / "vad"
     assert paths.merged_mixed_path("song", "lrc") == root / "output" / "merged" / "song" / "lrc" / "mixed.flac"
+    assert paths.merged_full_mixed_path("song") == root / "output" / "merged" / "song" / "full" / "mixed.flac"
     assert paths.slices_overrides_path("song", "lrc") == root / "output" / "slices" / "song" / "lrc" / "overrides.json"
 
 
@@ -72,3 +73,17 @@ def test_has_per_project_merged_mode_dirs(root: Path) -> None:
     assert paths.has_per_project_merged("demo")
     assert paths.has_per_project_merged("demo", "lrc")
     assert not paths.has_per_project_merged("demo", "vad")
+
+
+def test_has_per_project_merged_full_dir(root: Path) -> None:
+    mixed = paths.merged_full_mixed_path("demo")
+    mixed.parent.mkdir(parents=True)
+    mixed.write_bytes(b"x")
+    assert paths.has_per_project_merged("demo")
+    assert paths.has_per_project_merged("demo", "full")
+    assert not paths.has_per_project_merged("demo", "lrc")
+
+
+def test_resolve_merged_output_dir(root: Path) -> None:
+    assert paths.resolve_merged_output_dir("song", "whole_track", "lrc") == root / "output" / "merged" / "song" / "full"
+    assert paths.resolve_merged_output_dir("song", "slice_stitch", "vad") == root / "output" / "merged" / "song" / "vad"

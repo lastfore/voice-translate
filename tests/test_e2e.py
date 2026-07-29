@@ -101,10 +101,10 @@ def test_e2e01_full_pipeline_mocked(
     sep_i.write_bytes(b"i")
     ref = e2e_root / "input" / "ref.wav"
     ref.write_bytes(b"r")
-    full = e2e_root / "output" / "converted" / pid / "full.flac"
+    full = e2e_root / "output" / "converted" / pid / "full" / "full.flac"
     full.parent.mkdir(parents=True, exist_ok=True)
     full.write_bytes(b"full")
-    merged = e2e_root / "output" / "merged" / pid
+    merged = e2e_root / "output" / "merged" / pid / "full"
     merged.mkdir(parents=True, exist_ok=True)
 
     mock_sep.return_value = SeparateResult(vocals=sep_v, instrumental=sep_i)
@@ -132,7 +132,7 @@ def test_e2e01_full_pipeline_mocked(
     for stage, params in (
         (StageName.SEPARATE, {"mix_audio": str(e2e_root / "input" / "song.flac")}),
         (StageName.CONVERT, {"mode": "full_track", "reference": str(ref)}),
-        (StageName.MERGE, {"profile": "quick", "vocals": str(full), "instrumental": str(sep_i)}),
+        (StageName.MERGE, {"profile": "quick", "vocals": str(full), "instrumental": str(sep_i), "merge_mode": "whole_track"}),
     ):
         result = runner.run_stage(pid, stage, params)
         assert result.success, f"{stage.value}: {result.error}"

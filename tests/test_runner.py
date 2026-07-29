@@ -96,7 +96,7 @@ def test_run_merge_mocked(runner_workspace: tuple[ProjectStore, StageRunner, str
     vocals.write_bytes(b"v")
     inst = root / "output" / "separated" / "song_(Instrumental)_m.flac"
     inst.write_bytes(b"i")
-    merged = root / "output" / "merged" / pid
+    merged = root / "output" / "merged" / pid / "full"
 
     fake = MergeResult(
         vocals=merged / "vocals.flac",
@@ -107,15 +107,24 @@ def test_run_merge_mocked(runner_workspace: tuple[ProjectStore, StageRunner, str
     fake.vocals.write_bytes(b"x")
     fake.mixed.write_bytes(b"x")
 
-    with patch("pipeline.runner.run_merge", return_value=fake):
+    captured: dict[str, Path] = {}
+
+    def _fake_run_merge(project_id, vocals_path, instrumental_path, output_dir, **kwargs):
+        captured["output_dir"] = output_dir
+        return fake
+
+    with patch("pipeline.runner.run_merge", side_effect=_fake_run_merge):
         result = runner.run_stage(
             pid,
             StageName.MERGE,
-            {"vocals": str(vocals), "instrumental": str(inst), "profile": "quick"},
+            {"vocals": str(vocals), "instrumental": str(inst), "profile": "quick", "merge_mode": "whole_track"},
         )
 
     assert result.success
-    assert store.get_project(pid).stages[StageName.MERGE].status == StageStatus.DONE
+    assert captured["output_dir"] == merged.resolve()
+    project = store.get_project(pid)
+    assert project.stages[StageName.MERGE].status == StageStatus.DONE
+    assert "full" in project.stages[StageName.MERGE].artifacts
 
 
 def test_finalize_stage_keeps_resolved_paths_over_stale_params(

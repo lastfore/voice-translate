@@ -351,6 +351,30 @@ def test_resolve_merge_slice_mode_follows_vad_converted_dir(
     assert resolved["output_dir"].replace("\\", "/").endswith("merged/song/vad")
 
 
+def test_resolve_merge_whole_track_output_dir(
+    workspace: tuple[Path, ProjectStore],
+) -> None:
+    root, store = workspace
+    audio = root / "input" / "song.flac"
+    audio.write_bytes(b"x")
+    store.create_project("song", audio)
+
+    full = root / "output" / "converted" / "song" / "full" / "full.flac"
+    full.parent.mkdir(parents=True)
+    full.write_bytes(b"c")
+    inst = root / "output" / "separated" / "song_(Instrumental)_m.flac"
+    inst.parent.mkdir(parents=True, exist_ok=True)
+    inst.write_bytes(b"i")
+
+    resolved = store.resolve_stage_inputs(
+        "song",
+        StageName.MERGE,
+        {"merge_mode": "whole_track"},
+    )
+    assert resolved["output_dir"].replace("\\", "/").endswith("merged/song/full")
+    assert resolved["merge_mode"] == "whole_track"
+
+
 def test_resolve_slice_output_dir_follows_mode_override(
     workspace: tuple[Path, ProjectStore],
 ) -> None:

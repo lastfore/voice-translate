@@ -450,6 +450,15 @@ class ProjectStore:
             rec.artifacts = {k: v for k, v in artifacts.items() if v}
 
         merge_mode_art: dict[str, dict[str, str]] = {}
+        full_mixed = paths.merged_full_mixed_path(pid)
+        if full_mixed.is_file():
+            merge_mode_art[paths.MERGE_WHOLE_TRACK_DIR] = {
+                "merged_dir": rel_path(full_mixed.parent, self.root),
+                "mixed": rel_path(full_mixed, self.root),
+            }
+            full_vocals = full_mixed.parent / "vocals.flac"
+            if full_vocals.is_file():
+                merge_mode_art[paths.MERGE_WHOLE_TRACK_DIR]["vocals"] = rel_path(full_vocals, self.root)
         for mode in paths.SLICE_MODES:
             mixed = paths.merged_mixed_path(pid, mode)
             if mixed.is_file():
@@ -467,10 +476,14 @@ class ProjectStore:
             rec = project.stages[StageName.MERGE]
             if rec.status == StageStatus.NOT_RUN:
                 rec.status = StageStatus.DONE
-            active = self._active_slice_mode(project)
             rec.artifacts = dict(merge_mode_art)
-            if active in merge_mode_art:
-                rec.artifacts.update(merge_mode_art[active])
+            merge_mode = rec.params.get("merge_mode", paths.MERGE_WHOLE_TRACK)
+            if merge_mode == paths.MERGE_WHOLE_TRACK and paths.MERGE_WHOLE_TRACK_DIR in merge_mode_art:
+                rec.artifacts.update(merge_mode_art[paths.MERGE_WHOLE_TRACK_DIR])
+            else:
+                active = self._active_slice_mode(project)
+                if active in merge_mode_art:
+                    rec.artifacts.update(merge_mode_art[active])
         elif mixed.is_file():
             rec = project.stages[StageName.MERGE]
             if rec.status == StageStatus.NOT_RUN:
@@ -793,7 +806,10 @@ class ProjectStore:
                 resolved["manifest"] = rel_path(manifest, self.root)
             else:
                 resolved.pop("manifest", None)
-            resolved["output_dir"] = rel_path(paths.merged_mode_dir(pid, slice_mode), self.root)
+            resolved["output_dir"] = rel_path(
+                paths.resolve_merged_output_dir(pid, merge_mode, slice_mode), self.root
+            )
+            resolved["merge_mode"] = merge_mode
             resolved["slice_mode"] = slice_mode
             resolved["active_slice_mode"] = slice_mode
 

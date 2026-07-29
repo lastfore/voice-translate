@@ -403,15 +403,21 @@ class StageRunner:
             instrumental = _abs("instrumental")
             assert vocals is not None and instrumental is not None
             profile = params.get("profile") or params.get("merge_profile", "full")
+            merge_mode = (
+                params.get("merge_mode") or inputs.get("merge_mode") or paths.MERGE_WHOLE_TRACK
+            )
             slice_mode = paths.normalize_slice_mode(
                 inputs.get("slice_mode") or params.get("active_slice_mode") or params.get("slice_mode")
             )
+            archive_key = paths.resolve_merged_archive_key(merge_mode, slice_mode)
             manifest = _abs("manifest")
             slices_dir = _abs("slices_dir")
             if vocals.is_file():
                 manifest = None
                 slices_dir = None
-            merge_out = _abs("output_dir") or paths.merged_mode_dir(project_id, slice_mode)
+            merge_out = _abs("output_dir") or paths.resolve_merged_output_dir(
+                project_id, merge_mode, slice_mode
+            )
             result = run_merge(
                 project_id,
                 vocals,
@@ -431,19 +437,21 @@ class StageRunner:
                 on_progress=on_progress,
                 stage_log=stage_log,
             )
+            mode_art = {
+                "merged_dir": rel_path(result.merged_dir, root),
+                "vocals": rel_path(result.vocals, root),
+                "mixed": rel_path(result.mixed, root),
+            }
             return {
                 "artifacts": {
-                    slice_mode: {
-                        "merged_dir": rel_path(result.merged_dir, root),
-                        "vocals": rel_path(result.vocals, root),
-                        "mixed": rel_path(result.mixed, root),
-                    },
+                    archive_key: mode_art,
                     "merged_dir": rel_path(result.merged_dir, root),
                     "vocals": rel_path(result.vocals, root),
                     "mixed": rel_path(result.mixed, root),
                 },
                 "params": {
                     "profile": profile,
+                    "merge_mode": merge_mode,
                     "active_slice_mode": slice_mode,
                     **{
                         k: params[k]

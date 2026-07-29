@@ -71,6 +71,7 @@ def test_slices_and_converted_dirs(root: Path) -> None:
     assert paths.converted_slices_dir("abc") == root / "output" / "converted" / "abc" / "slices"
     assert paths.converted_full_track_path("abc") == root / "output" / "converted" / "abc" / "full" / "full.flac"
     assert paths.merged_dir("abc") == root / "output" / "merged" / "abc"
+    assert paths.merged_full_dir("abc") == root / "output" / "merged" / "abc" / "full"
 
 
 def test_resolve_converted_layout_new_and_legacy(root: Path) -> None:

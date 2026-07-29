@@ -127,6 +127,9 @@ def slices_dir(project_id: str) -> Path:
 
 
 SLICE_MODES = ("lrc", "vad")
+MERGE_WHOLE_TRACK_DIR = "full"
+MERGE_WHOLE_TRACK = "whole_track"
+MERGE_SLICE_STITCH = "slice_stitch"
 
 
 def normalize_slice_mode(mode: str | None) -> str:
@@ -176,8 +179,28 @@ def merged_mode_dir(project_id: str, mode: str) -> Path:
     return merged_dir(project_id) / normalize_slice_mode(mode)
 
 
+def merged_full_dir(project_id: str) -> Path:
+    return merged_dir(project_id) / MERGE_WHOLE_TRACK_DIR
+
+
 def merged_mixed_path(project_id: str, mode: str) -> Path:
     return merged_mode_dir(project_id, mode) / "mixed.flac"
+
+
+def merged_full_mixed_path(project_id: str) -> Path:
+    return merged_full_dir(project_id) / "mixed.flac"
+
+
+def resolve_merged_archive_key(merge_mode: str, slice_mode: str) -> str:
+    if merge_mode == MERGE_WHOLE_TRACK:
+        return MERGE_WHOLE_TRACK_DIR
+    return normalize_slice_mode(slice_mode)
+
+
+def resolve_merged_output_dir(project_id: str, merge_mode: str, slice_mode: str) -> Path:
+    if merge_mode == MERGE_WHOLE_TRACK:
+        return merged_full_dir(project_id)
+    return merged_mode_dir(project_id, slice_mode)
 
 
 def converted_dir(project_id: str) -> Path:
@@ -287,9 +310,13 @@ def has_converted_artifacts(project_id: str) -> bool:
 
 
 def has_per_project_merged(project_id: str, mode: str | None = None) -> bool:
+    if mode == MERGE_WHOLE_TRACK_DIR:
+        return merged_full_mixed_path(project_id).is_file()
     if mode is not None:
         return merged_mixed_path(project_id, mode).is_file()
     if (merged_dir(project_id) / "mixed.flac").is_file():
+        return True
+    if merged_full_mixed_path(project_id).is_file():
         return True
     return any(merged_mixed_path(project_id, m).is_file() for m in SLICE_MODES)
 

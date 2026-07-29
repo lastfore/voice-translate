@@ -340,7 +340,7 @@ def test_merge_exec_and_proc(runner_workspace) -> None:
     vocals.write_bytes(b"v")
     inst = root / "output" / "separated" / "i.flac"
     inst.write_bytes(b"i")
-    merged = root / "output" / "merged" / pid
+    merged = root / "output" / "merged" / pid / "full"
 
     def _fake_merge(*args, **kwargs):
         sl = kwargs.get("stage_log")
