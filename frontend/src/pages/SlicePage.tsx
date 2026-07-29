@@ -27,7 +27,11 @@ function SlicePageInner({ projectId, initialMode }: { projectId: string; initial
   const [lrcOverride, setLrcOverride] = useState('')
 
   const { data: defaults } = useProjectDefaults(projectId)
-  const { data: schema, isLoading: schemaLoading } = useStageParams({ stage: 'slice' })
+  const { data: schema, isLoading: schemaLoading } = useStageParams({
+    stage: 'slice',
+    vadOnly: mode === 'vad',
+    lrcOnly: mode === 'lrc',
+  })
   const { data: sliceTable, isLoading: slicesLoading } = useSliceTable(projectId, mode)
   const stageRun = useStageRun(projectId, 'slice')
   const queryClient = useQueryClient()
@@ -53,7 +57,7 @@ function SlicePageInner({ projectId, initialMode }: { projectId: string; initial
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stageRun.status])
 
-  const visibleParams = (schema?.params ?? []).filter((p) => (mode === 'vad' ? true : !p.vad_only))
+  const visibleParams = schema?.params ?? []
 
   const handleSubmit = (values: StageParamValues) => {
     const params: StageParamValues = { ...values, mode }

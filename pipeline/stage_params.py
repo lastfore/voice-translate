@@ -28,6 +28,8 @@ class StageParam:
     wizard: bool = False
     # VAD-only params; ignored when slice mode is LRC
     vad_only: bool = False
+    # LRC-only params; ignored when slice mode is VAD
+    lrc_only: bool = False
     # Convert mode filters
     slice_batch_only: bool = False
     full_track_only: bool = False
@@ -162,6 +164,67 @@ STAGE_PARAMS: dict[str, list[StageParam]] = {
             maximum=500,
             step=10,
             vad_only=True,
+        ),
+        StageParam(
+            key="boundary_mode",
+            label="边界模式",
+            description=(
+                "LRC 相邻句切点策略。"
+                "起音对齐会在下一行 LRC 戳前检测真实起唱并前移切点；"
+                "LRC 严格模式与旧版行为一致。"
+            ),
+            param_type="choice",
+            default="onset_aligned",
+            choices=("onset_aligned", "lrc_strict"),
+            wizard=True,
+            lrc_only=True,
+        ),
+        StageParam(
+            key="search_margin_ms",
+            label="起音搜索回溯 (ms)",
+            description="从下一行 LRC 时间戳向前回溯的最大搜索距离。",
+            param_type="int",
+            default=400,
+            minimum=50,
+            maximum=2000,
+            step=50,
+            lrc_only=True,
+        ),
+        StageParam(
+            key="onset_min_lead_silence_ms",
+            label="起音前最短静音 (ms)",
+            description="起音点前要求的最短低能量区间，用于区分换气与本句尾音。",
+            param_type="int",
+            default=80,
+            minimum=20,
+            maximum=500,
+            step=10,
+            lrc_only=True,
+        ),
+        StageParam(
+            key="min_slice_ms",
+            label="最短切片 (ms)",
+            description="对齐后任一句短于此值时，该边界回退到 LRC 时间戳。",
+            param_type="int",
+            default=500,
+            minimum=100,
+            maximum=5000,
+            step=50,
+            lrc_only=True,
+        ),
+        StageParam(
+            key="onset_energy_threshold_db",
+            label="起音能量阈值 (dB)",
+            description=(
+                "相对搜索窗口峰值 RMS 的起音检测阈值（dB）。"
+                "数值越大（如 -35）越敏感；越小（如 -45）越保守。"
+            ),
+            param_type="float",
+            default=-40.0,
+            minimum=-60.0,
+            maximum=-20.0,
+            step=1.0,
+            lrc_only=True,
         ),
     ],
     StageName.CONVERT.value: [
@@ -357,6 +420,8 @@ def collect_params(
             continue
         param = schema[key]
         if param.vad_only and slice_mode and slice_mode != "vad":
+            continue
+        if param.lrc_only and slice_mode and slice_mode != "lrc":
             continue
         if param.slice_batch_only and convert_mode and convert_mode != "slice_batch":
             continue

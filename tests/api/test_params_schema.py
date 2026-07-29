@@ -48,6 +48,19 @@ def test_schema_keys_filter(api_workspace) -> None:
     assert keys == {"diffusion_steps", "length_adjust"}
 
 
+def test_schema_lrc_only_filter(api_workspace) -> None:
+    client = TestClient(api_workspace.app)
+    resp = client.get("/api/params/schema", params={"stage": "slice", "lrc_only": "true"})
+    keys = {p["key"] for p in resp.json()["params"]}
+    assert keys == {
+        "boundary_mode",
+        "search_margin_ms",
+        "onset_min_lead_silence_ms",
+        "min_slice_ms",
+        "onset_energy_threshold_db",
+    }
+
+
 def test_schema_repeated_requests_hit_lru_cache(api_workspace, monkeypatch) -> None:
     """Cache is keyed on (stage, vad_only, slice_batch_only, keys); repeated calls
     with the same filters must not re-invoke the underlying schema-building work."""

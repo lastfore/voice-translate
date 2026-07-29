@@ -315,6 +315,11 @@ class StageRunner:
                 min_speech_ms=int(params.get("min_speech_ms", 250)),
                 min_silence_ms=int(params.get("min_silence_ms", 500)),
                 speech_pad_ms=int(params.get("speech_pad_ms", 80)),
+                boundary_mode=str(params.get("boundary_mode", "onset_aligned")),
+                search_margin_ms=int(params.get("search_margin_ms", 400)),
+                onset_min_lead_silence_ms=int(params.get("onset_min_lead_silence_ms", 80)),
+                min_slice_ms=int(params.get("min_slice_ms", 500)),
+                onset_energy_threshold_db=float(params.get("onset_energy_threshold_db", -40.0)),
                 on_progress=on_progress,
                 stage_log=stage_log,
             )
@@ -339,6 +344,11 @@ class StageRunner:
                             "min_speech_ms",
                             "min_silence_ms",
                             "speech_pad_ms",
+                            "boundary_mode",
+                            "search_margin_ms",
+                            "onset_min_lead_silence_ms",
+                            "min_slice_ms",
+                            "onset_energy_threshold_db",
                         )
                         if k in params
                     },

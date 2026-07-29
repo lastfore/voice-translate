@@ -39,6 +39,8 @@ class ParamLogGroups:
     wizard: dict[str, Any] = field(default_factory=dict)
     advanced: dict[str, Any] = field(default_factory=dict)
     defaulted: dict[str, Any] = field(default_factory=dict)
+    slice_mode_params: dict[str, Any] = field(default_factory=dict)
+    slice_mode_label: str = ""
 
 
 def pick_inputs(
@@ -146,7 +148,13 @@ def build_param_groups(
         if param is None:
             continue
         default_val = defaults.get(key)
-        if param.wizard:
+        if param.lrc_only or param.vad_only:
+            groups.slice_mode_params[key] = value
+            if param.lrc_only:
+                groups.slice_mode_label = "lrc"
+            elif not groups.slice_mode_label:
+                groups.slice_mode_label = "vad"
+        elif param.wizard:
             groups.wizard[key] = value
         elif value != default_val:
             groups.advanced[key] = value
@@ -234,6 +242,9 @@ class StageLogWriter:
     def params(self, groups: ParamLogGroups) -> None:
         if groups.mode:
             self._emit(f"[PARAM] {_format_param_values(groups.mode)}")
+        if groups.slice_mode_params:
+            label = groups.slice_mode_label or "mode"
+            self._emit(f"[PARAM] {label}: {_format_param_values(groups.slice_mode_params)}")
         if groups.wizard:
             self._emit(f"[PARAM] wizard: {_format_param_values(groups.wizard)}")
         if groups.advanced:

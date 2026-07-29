@@ -27,12 +27,24 @@ def test_merge_after_reslice_lrc_text_match() -> None:
     )
     old_manifest = {
         "slices": [
-            {"id": "slice_000", "start_ms": 1000, "end_ms": 2000, "text": "hello"},
+            {
+                "id": "slice_000",
+                "start_ms": 1000,
+                "end_ms": 2000,
+                "lrc_start_ms": 1000,
+                "text": "hello",
+            },
         ]
     }
     new_manifest = {
         "slices": [
-            {"id": "slice_000", "start_ms": 1050, "end_ms": 2050, "text": "hello"},
+            {
+                "id": "slice_000",
+                "start_ms": 950,
+                "end_ms": 2050,
+                "lrc_start_ms": 1000,
+                "text": "hello",
+            },
         ]
     }
     merged = merge_after_reslice(
@@ -42,6 +54,32 @@ def test_merge_after_reslice_lrc_text_match() -> None:
         old_manifest=old_manifest,
     )
     assert merged.slices["slice_000"]["semi_tone_shift"] == 3
+    assert not merged.orphans
+
+
+def test_merge_after_reslice_uses_lrc_start_ms_not_aligned_start() -> None:
+    old = SliceOverrides(
+        slices={"slice_001": {"semi_tone_shift": 5}},
+    )
+    old_manifest = {
+        "slices": [
+            {"id": "slice_000", "start_ms": 1000, "lrc_start_ms": 1000, "text": "a"},
+            {"id": "slice_001", "start_ms": 25090, "lrc_start_ms": 25090, "text": "b"},
+        ]
+    }
+    new_manifest = {
+        "slices": [
+            {"id": "slice_000", "start_ms": 1000, "lrc_start_ms": 1000, "text": "a"},
+            {"id": "slice_001", "start_ms": 24820, "lrc_start_ms": 25090, "text": "b"},
+        ]
+    }
+    merged = merge_after_reslice(
+        old,
+        new_manifest,
+        mode=SliceMode.LRC.value,
+        old_manifest=old_manifest,
+    )
+    assert merged.slices["slice_001"]["semi_tone_shift"] == 5
     assert not merged.orphans
 
 

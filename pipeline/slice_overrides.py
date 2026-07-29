@@ -81,10 +81,12 @@ def effective_params(
     return merged
 
 
+def _lrc_match_start(item: dict[str, Any]) -> float:
+    return float(item.get("lrc_start_ms", item.get("start_ms", 0)))
+
+
 def _slice_identity(item: dict[str, Any]) -> tuple[float, str]:
-    start = float(item.get("start_ms", 0))
-    text = str(item.get("text") or "")
-    return start, text
+    return _lrc_match_start(item), str(item.get("text") or "")
 
 
 def _match_slice(
@@ -103,17 +105,18 @@ def _match_slice(
         if old_id and new_id == old_id:
             return new_id
 
+    match_start = _lrc_match_start
     if mode == SliceMode.LRC.value and old_text:
         for item in new_slices:
             if str(item.get("text") or "") != old_text:
                 continue
-            if abs(float(item.get("start_ms", 0)) - old_start) <= tolerance_ms:
+            if abs(match_start(item) - old_start) <= tolerance_ms:
                 return str(item.get("id", ""))
 
     best_id: str | None = None
     best_delta = tolerance_ms + 1.0
     for item in new_slices:
-        delta = abs(float(item.get("start_ms", 0)) - old_start)
+        delta = abs(match_start(item) - old_start)
         if delta <= tolerance_ms and delta < best_delta:
             best_delta = delta
             best_id = str(item.get("id", ""))
@@ -146,7 +149,7 @@ def merge_after_reslice(
         old_item = old_by_id.get(old_id)
         entry: dict[str, Any] = {"slice_id": old_id, "params": params}
         if old_item:
-            entry["start_ms"] = old_item.get("start_ms")
+            entry["start_ms"] = _lrc_match_start(old_item)
             entry["text"] = old_item.get("text")
         matched = _match_slice(entry, new_slices, mode=mode, tolerance_ms=tolerance_ms)
         if matched:

@@ -42,21 +42,25 @@ def _param_to_dict(param: StageParam) -> dict[str, Any]:
         "step": param.step,
         "wizard": param.wizard,
         "vad_only": param.vad_only,
+        "lrc_only": param.lrc_only,
         "slice_batch_only": param.slice_batch_only,
         "full_track_only": param.full_track_only,
     }
 
 
-@lru_cache(maxsize=8)
+@lru_cache(maxsize=16)
 def _build_schema_cached(
     stage: str,
     vad_only: bool,
+    lrc_only: bool,
     slice_batch_only: bool,
     keys: tuple[str, ...] | None,
 ) -> dict[str, Any]:
     items = params_for_stage(stage)
     if vad_only:
         items = [p for p in items if p.vad_only]
+    if lrc_only:
+        items = [p for p in items if p.lrc_only]
     if slice_batch_only:
         items = [p for p in items if p.slice_batch_only]
     if keys:
@@ -72,7 +76,7 @@ def _build_schema_cached(
 def warm_schema_cache() -> None:
     """Pre-populate the cache for the plain (unfiltered) schema of every stage."""
     for stage in StageName:
-        _build_schema_cached(stage.value, False, False, None)
+        _build_schema_cached(stage.value, False, False, False, None)
 
 
 def clear_schema_cache() -> None:
@@ -84,6 +88,7 @@ def clear_schema_cache() -> None:
 def get_schema(
     stage: str = Query(...),
     vad_only: bool = False,
+    lrc_only: bool = False,
     slice_batch_only: bool = False,
     keys: str | None = None,
 ) -> dict[str, Any]:
@@ -93,7 +98,7 @@ def get_schema(
         raise HTTPException(status_code=404, detail=f"unknown stage: {stage}") from exc
 
     key_tuple = tuple(sorted(k.strip() for k in keys.split(",") if k.strip())) if keys else None
-    return _build_schema_cached(stage, vad_only, slice_batch_only, key_tuple)
+    return _build_schema_cached(stage, vad_only, lrc_only, slice_batch_only, key_tuple)
 
 
 @router.get("/separator-models")

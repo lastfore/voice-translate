@@ -6,12 +6,13 @@ import type { StageParamSchemaResponse } from '@/types/pipeline'
 export interface StageParamsFilter {
   stage: string
   vadOnly?: boolean
+  lrcOnly?: boolean
   sliceBatchOnly?: boolean
   keys?: string[]
 }
 
 export function stageParamsKey(filter: StageParamsFilter) {
-  return ['stageParams', filter.stage, filter.vadOnly ?? false, filter.sliceBatchOnly ?? false, filter.keys?.join(',') ?? ''] as const
+  return ['stageParams', filter.stage, filter.vadOnly ?? false, filter.lrcOnly ?? false, filter.sliceBatchOnly ?? false, filter.keys?.join(',') ?? ''] as const
 }
 
 /**
@@ -27,6 +28,7 @@ export function useStageParams(filter: StageParamsFilter) {
       api.get<StageParamSchemaResponse>('/api/params/schema', {
         stage: filter.stage,
         vad_only: filter.vadOnly,
+        lrc_only: filter.lrcOnly,
         slice_batch_only: filter.sliceBatchOnly,
         keys: filter.keys?.join(','),
       }),

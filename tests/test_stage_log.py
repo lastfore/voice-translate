@@ -25,18 +25,62 @@ def test_build_param_groups_lrc_slice_excludes_vad(root: Path) -> None:
     """P1-TC-001: LRC slice mode must not include VAD-only params."""
     params = {
         "mode": "lrc",
+        "boundary_mode": "onset_aligned",
+        "search_margin_ms": 400,
+        "onset_min_lead_silence_ms": 80,
+        "min_slice_ms": 500,
         "vad_threshold": 0.45,
         "min_speech_ms": 250,
         "min_silence_ms": 500,
         "speech_pad_ms": 80,
     }
     groups = build_param_groups(StageName.SLICE, params, {"mode": "lrc"})
-    all_keys = set(groups.wizard) | set(groups.advanced) | set(groups.defaulted)
+    all_keys = (
+        set(groups.wizard)
+        | set(groups.advanced)
+        | set(groups.defaulted)
+        | set(groups.slice_mode_params)
+    )
     assert "vad_threshold" not in all_keys
     assert "min_speech_ms" not in all_keys
     assert "min_silence_ms" not in all_keys
     assert "speech_pad_ms" not in all_keys
     assert groups.mode.get("mode") == "lrc"
+    assert groups.slice_mode_label == "lrc"
+    assert groups.slice_mode_params.get("boundary_mode") == "onset_aligned"
+    assert groups.slice_mode_params.get("search_margin_ms") == 400
+    assert groups.slice_mode_params.get("onset_min_lead_silence_ms") == 80
+    assert groups.slice_mode_params.get("min_slice_ms") == 500
+    assert groups.slice_mode_params.get("onset_energy_threshold_db") == -40.0
+    assert "boundary_mode" not in groups.wizard
+
+
+def test_stage_log_writer_lrc_params_line(root: Path) -> None:
+    captured: list[str] = []
+    writer = StageLogWriter(
+        project_id="song",
+        stage=StageName.SLICE,
+        job_id="slice-x",
+        log_path=root / "slice.log",
+        root=root,
+        on_progress=lambda e: captured.append(e.log_line or ""),
+    )
+    groups = build_param_groups(
+        StageName.SLICE,
+        {
+            "mode": "lrc",
+            "search_margin_ms": 350,
+            "onset_min_lead_silence_ms": 90,
+        },
+        {"mode": "lrc"},
+    )
+    writer.params(groups)
+
+    lrc_line = next(line for line in captured if line.startswith("[PARAM] lrc:"))
+    assert "boundary_mode=onset_aligned" in lrc_line
+    assert "search_margin_ms=350" in lrc_line
+    assert "onset_min_lead_silence_ms=90" in lrc_line
+    assert "min_slice_ms=500" in lrc_line
 
 
 def test_build_param_groups_advanced_vs_defaulted(root: Path) -> None:

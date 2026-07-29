@@ -36,6 +36,7 @@ export interface StageParamSchema {
   step: number | null
   wizard: boolean
   vad_only: boolean
+  lrc_only: boolean
   slice_batch_only: boolean
   full_track_only: boolean
 }

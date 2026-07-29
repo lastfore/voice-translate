@@ -292,7 +292,13 @@ def test_slice_lrc_exec_context(runner_workspace) -> None:
         result = runner.run_stage(
             pid,
             StageName.SLICE,
-            {"vocals": str(vocals), "mode": "lrc", "lrc": str(lrc)},
+            {
+                "vocals": str(vocals),
+                "mode": "lrc",
+                "lrc": str(lrc),
+                "search_margin_ms": 350,
+                "onset_min_lead_silence_ms": 90,
+            },
         )
 
     assert result.success
@@ -300,7 +306,58 @@ def test_slice_lrc_exec_context(runner_workspace) -> None:
     assert "[EXEC]" in text
     assert "slice-vocals-lrc.py" in text
     assert text.count("[INPUT]") >= 1
-    assert text.count("[PARAM]") >= 0
+    assert "[PARAM] lrc:" in text
+    assert "boundary_mode=onset_aligned" in text
+    assert "search_margin_ms=350" in text
+    assert "onset_min_lead_silence_ms=90" in text
+    assert "min_slice_ms=500" in text
+    assert "onset_energy_threshold_db=-40" in text
+
+
+def test_slice_lrc_logs_per_boundary_diagnostics(runner_workspace) -> None:
+    """Each LRC boundary emits aligned/fallback, method, and reason in the job log."""
+    import shutil
+    import wave
+
+    import numpy as np
+
+    from tests.test_slice_vocals_lrc import ROOT as REPO_ROOT
+
+    _, runner, pid, root = runner_workspace
+    scripts_dst = root / "scripts"
+    if not scripts_dst.is_dir():
+        shutil.copytree(REPO_ROOT / "scripts", scripts_dst)
+
+    vocals = root / "output" / "separated" / "v.flac"
+    vocals.parent.mkdir(parents=True, exist_ok=True)
+    lrc = root / "input" / "song.lrc"
+    lrc.write_text(
+        "[00:10.00]line one\n[00:15.00]line two\n[00:20.00]line three\n",
+        encoding="utf-8",
+    )
+
+    sr = 44100
+    audio = np.full(int(sr * 25), 0.001, dtype=np.float32)
+    for onset_ms in (14700.0, 19700.0):
+        audio[int(sr * onset_ms / 1000) :] = 0.5
+    pcm = (np.clip(audio, -1.0, 1.0) * 32767).astype(np.int16)
+    with wave.open(str(vocals), "w") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(sr)
+        handle.writeframes(pcm.tobytes())
+
+    result = runner.run_stage(
+        pid,
+        StageName.SLICE,
+        {"vocals": str(vocals), "mode": "lrc", "lrc": str(lrc)},
+    )
+    assert result.success
+
+    text = _latest_log(root, pid).read_text(encoding="utf-8")
+    assert "[PROC] [BOUNDARY]" in text
+    assert "aligned method=silence_onset reason=aligned_silence" in text
+    assert text.count("[PROC] [BOUNDARY]") == 2
 
 
 def test_slice_vad_exec_shows_vad_params(runner_workspace) -> None:
@@ -328,7 +385,9 @@ def test_slice_vad_exec_shows_vad_params(runner_workspace) -> None:
         runner.run_stage(pid, StageName.SLICE, {"vocals": str(vocals), "mode": "vad"})
 
     text = _latest_log(root, pid).read_text(encoding="utf-8")
-    assert "vad_threshold" in text
+    assert "[PARAM] vad:" in text
+    assert "vad_threshold=0.45" in text
+    assert "min_speech_ms=250" in text
     assert "lrc_path" not in text
 
 

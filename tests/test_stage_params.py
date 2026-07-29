@@ -30,6 +30,16 @@ def test_collect_params_skips_vad_in_lrc_mode() -> None:
     values["vad_threshold"] = 0.2
     out = collect_params(StageName.SLICE.value, values, slice_mode="lrc")
     assert "vad_threshold" not in out
+    assert "boundary_mode" in out
+    assert "onset_energy_threshold_db" in out
+
+
+def test_collect_params_skips_lrc_in_vad_mode() -> None:
+    values = default_stage_params(StageName.SLICE.value)
+    values["search_margin_ms"] = 300
+    out = collect_params(StageName.SLICE.value, values, slice_mode="vad")
+    assert "search_margin_ms" not in out
+    assert "vad_threshold" in out
 
 
 def test_collect_params_keeps_vad_in_vad_mode() -> None:

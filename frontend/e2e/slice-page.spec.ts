@@ -101,3 +101,32 @@ test('slice table row selection resolves audio preview', async ({ page }) => {
   expect(src).toContain('/api/media?path=')
   expect(src).toContain('output/slices')
 })
+
+/**
+ * TC-Phase4-01: LRC mode shows onset-alignment params; VAD params stay hidden.
+ */
+test('lrc mode shows onset alignment params', async ({ page }) => {
+  const audioPath = makeFakeFlac()
+  const projectId = `slice-lrc-params-${Date.now()}`
+
+  await page.goto('/')
+  await page.waitForSelector('[data-testid="app-sidebar"]')
+  await createProject(page, projectId, audioPath)
+  await selectProject(page, projectId)
+  await page.getByTestId('tab-slice').click()
+  await page.waitForSelector('[data-testid="slice-page"]')
+
+  await page.getByTestId('mode-tab-vad').click()
+  await page.getByTestId('advanced-params-trigger').click()
+  await expect(page.getByTestId('param-vad_threshold')).toBeVisible()
+  await expect(page.getByTestId('param-boundary_mode')).toHaveCount(0)
+
+  await page.getByTestId('mode-tab-lrc').click()
+  await page.getByTestId('advanced-params-trigger').click()
+  await expect(page.getByTestId('param-boundary_mode')).toBeVisible()
+  await expect(page.getByTestId('param-search_margin_ms')).toBeVisible()
+  await expect(page.getByTestId('param-onset_min_lead_silence_ms')).toBeVisible()
+  await expect(page.getByTestId('param-min_slice_ms')).toBeVisible()
+  await expect(page.getByTestId('param-onset_energy_threshold_db')).toBeVisible()
+  await expect(page.getByTestId('param-vad_threshold')).toHaveCount(0)
+})
