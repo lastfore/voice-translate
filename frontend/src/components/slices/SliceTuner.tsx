@@ -116,7 +116,7 @@ export function SliceTuner({ projectId, sliceMode }: SliceTunerProps) {
       const form = new FormData()
       form.set('audio', referenceFile)
       try {
-        const resp = await api.post<{ reference: string }>(`/api/projects/${projectId}/reference`, form)
+        const resp = await api.postForm<{ reference: string }>(`/api/projects/${projectId}/reference`, form)
         params.reference = resp.reference
         setReferencePath(resp.reference)
         setReferenceFile(null)

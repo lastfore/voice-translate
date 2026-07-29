@@ -146,6 +146,12 @@ export interface SliceTableResponse {
   first_audio_url: string | null
 }
 
+/** Response of `GET /api/projects/{id}/converted-slices`. */
+export interface ConvertedSliceTableResponse extends SliceTableResponse {
+  converted_count: number
+  total_count: number
+}
+
 /** `GET /api/fs/browse` response — api/routers/filesystem.py. */
 export interface FsEntry {
   name: string

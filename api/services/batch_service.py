@@ -151,9 +151,11 @@ class BatchService:
         convert_mode = item.params.get("convert_mode", "slice_batch")
         if isinstance(convert_mode, str):
             convert_mode = ConvertMode(convert_mode)
-        slice_mode = item.params.get("slice_mode", "lrc")
-        if isinstance(slice_mode, str):
-            slice_mode = SliceMode(slice_mode)
+        slice_mode_raw = item.params.get("slice_mode")
+        if slice_mode_raw:
+            slice_mode = SliceMode(slice_mode_raw) if isinstance(slice_mode_raw, str) else slice_mode_raw
+        else:
+            slice_mode = SliceMode(self._store.resolve_pipeline_slice_mode(item.project_id))
         try:
             result = self._runner.run_pipeline(
                 item.project_id,

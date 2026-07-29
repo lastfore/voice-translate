@@ -6,10 +6,14 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pipeline import paths
 from pipeline.models import ProgressEvent, StageName
 from pipeline.venv_runner import ProgressLineCallback, run_subprocess, separator_cli_cmd, separator_env, separator_python
+
+if TYPE_CHECKING:
+    from pipeline.stage_log import StageLogWriter
 
 DEFAULT_MODEL = "mel_band_roformer_kim_ft_unwa.ckpt"
 _PROGRESS_RE = re.compile(r"(\d+)%|Processing|Separating", re.IGNORECASE)
@@ -46,6 +50,7 @@ def run_separate(
     model: str = DEFAULT_MODEL,
     on_progress: Callable[[ProgressEvent], None] | None = None,
     on_log_line: ProgressLineCallback | None = None,
+    stage_log: StageLogWriter | None = None,
 ) -> SeparateResult:
     """Run audio-separator; outputs land in output/separated/."""
     root = paths.get_root()
@@ -76,18 +81,20 @@ def run_separate(
                     job_id=job_id,
                     percent=percent,
                     message=message,
-                    log_line=log_line,
+                    log_line=None if stage_log else log_line,
                 )
             )
 
     def _line_handler(line: str) -> None:
-        if on_log_line:
+        if stage_log:
+            stage_log.line(line)
+        elif on_log_line:
             on_log_line(line)
         match = _PROGRESS_RE.search(line)
         if match and match.group(1):
-            _emit(line, float(match.group(1)), line)
+            _emit(line, float(match.group(1)))
         else:
-            _emit(line, None, line)
+            _emit(line, None)
 
     _emit(f"Separating {mix_audio.name}", 0.0)
 
@@ -102,6 +109,13 @@ def run_separate(
         "--output_dir",
         str(paths.separated_dir()),
     )
+
+    if stage_log:
+        stage_log.cmd(
+            [str(x) for x in cmd],
+            cwd=str(root),
+            python=str(separator_python()),
+        )
 
     result = run_subprocess(cmd, cwd=root, env=separator_env(), on_line=_line_handler)
     if result.returncode != 0:

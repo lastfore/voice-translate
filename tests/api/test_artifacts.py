@@ -62,6 +62,13 @@ def test_convert_preview_full_track(api_workspace, sample_audio: Path) -> None:
 def test_convert_preview_slice_batch(api_workspace, sample_audio: Path) -> None:
     client = TestClient(api_workspace.app)
     _create_project(client, sample_audio, "convert-batch")
+    slice_dir = _write_manifest(
+        api_workspace.root,
+        "convert-batch",
+        "lrc",
+        [{"id": "s0", "start_ms": 0, "end_ms": 1000, "text": "hi", "file": "s0.flac"}],
+    )
+    (slice_dir / "s0.flac").write_bytes(b"fake")
     mode_dir = api_workspace.root / "output" / "converted" / "convert-batch" / "lrc"
     mode_dir.mkdir(parents=True, exist_ok=True)
     (mode_dir / "s0.flac").write_bytes(b"fake")
@@ -71,3 +78,31 @@ def test_convert_preview_slice_batch(api_workspace, sample_audio: Path) -> None:
     )
     assert resp.status_code == 200
     assert resp.json()["url"] == "/api/media?path=output/converted/convert-batch/lrc/s0.flac"
+
+
+def test_converted_slices_table(api_workspace, sample_audio: Path) -> None:
+    client = TestClient(api_workspace.app)
+    _create_project(client, sample_audio, "conv-table")
+    slice_dir = _write_manifest(
+        api_workspace.root,
+        "conv-table",
+        "vad",
+        [
+            {"id": "s0", "start_ms": 0, "end_ms": 1000, "text": "a", "file": "s0.flac"},
+            {"id": "s1", "start_ms": 1000, "end_ms": 2000, "text": "b", "file": "s1.flac"},
+        ],
+    )
+    (slice_dir / "s0.flac").write_bytes(b"fake")
+    (slice_dir / "s1.flac").write_bytes(b"fake")
+    out_dir = api_workspace.root / "output" / "converted" / "conv-table" / "vad"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "s0.flac").write_bytes(b"fake")
+
+    resp = client.get("/api/projects/conv-table/converted-slices", params={"mode": "vad"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_count"] == 2
+    assert body["converted_count"] == 1
+    assert body["rows"][0]["status"] == "converted"
+    assert body["rows"][0]["audio_url"] is not None
+    assert body["rows"][1]["audio_url"] is None

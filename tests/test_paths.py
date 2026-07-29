@@ -43,6 +43,17 @@ def test_separated_instrumental_other_stem(root: Path) -> None:
     assert paths.separated_instrumental_path("mysong") == other
 
 
+def test_paired_vocals_from_instrumental(root: Path) -> None:
+    sep = root / "output" / "separated"
+    vocal = sep / "test_(vocals)_mel_band_roformer_kim_ft_unwa.flac"
+    vocal.write_bytes(b"x")
+    other = sep / "test_(other)_mel_band_roformer_kim_ft_unwa.flac"
+    other.write_bytes(b"x")
+
+    assert paths.paired_vocals_from_instrumental(other) == vocal
+    assert paths.paired_vocals_from_instrumental(vocal) is None
+
+
 def test_input_audio_path_multiple_extensions(root: Path) -> None:
     (root / "input" / "demo.wav").write_bytes(b"x")
     assert paths.input_audio_path("demo") == root / "input" / "demo.wav"

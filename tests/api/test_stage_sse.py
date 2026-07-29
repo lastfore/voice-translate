@@ -25,7 +25,7 @@ from pipeline.stages.separate import SeparateResult
 
 
 def _slow_fake_separate(total_delay: float, steps: int = 3):
-    def _fn(project_id, mix_audio, *, model, on_progress=None, on_log_line=None):
+    def _fn(project_id, mix_audio, *, model, on_progress=None, on_log_line=None, stage_log=None, **kwargs):
         for i in range(steps):
             time.sleep(total_delay / steps)
             if on_progress:

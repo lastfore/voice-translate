@@ -180,3 +180,208 @@ def test_resolve_convert_inputs_prefers_slice_stage_mode(workspace: tuple[Path, 
     assert resolved["mode"] == "slice_batch"
     assert resolved["slice_mode"] == "vad"
     assert resolved["slices_dir"].replace("\\", "/").endswith("slices/song/vad")
+    assert resolved["output_dir"].replace("\\", "/").endswith("converted/song/vad")
+
+
+def test_resolve_convert_output_dir_follows_explicit_slice_mode(
+    workspace: tuple[Path, ProjectStore],
+) -> None:
+    root, store = workspace
+    audio = root / "input" / "song.flac"
+    audio.write_bytes(b"x")
+    store.create_project("song", audio)
+    vad_dir = root / "output" / "slices" / "song" / "vad"
+    lrc_dir = root / "output" / "slices" / "song" / "lrc"
+    vad_dir.mkdir(parents=True)
+    lrc_dir.mkdir(parents=True)
+    (vad_dir / "manifest.json").write_text('{"slices": []}', encoding="utf-8")
+    (lrc_dir / "manifest.json").write_text('{"slices": []}', encoding="utf-8")
+
+    project = store.get_project("song")
+    project.stages[StageName.CONVERT].inputs = {
+        "slices_dir": "output/slices/song/vad",
+        "output_dir": "output/converted/song/lrc",
+        "slice_mode": "lrc",
+        "active_slice_mode": "lrc",
+    }
+    store.save_project(project)
+
+    resolved = store.resolve_stage_inputs(
+        "song",
+        StageName.CONVERT,
+        {"mode": "slice_batch", "slice_mode": "lrc", "active_slice_mode": "lrc"},
+    )
+    assert resolved["slices_dir"].replace("\\", "/").endswith("slices/song/lrc")
+    assert resolved["output_dir"].replace("\\", "/").endswith("converted/song/lrc")
+    assert resolved["slice_mode"] == "lrc"
+
+
+def test_resolve_convert_manifest_follows_slices_dir_mode(workspace: tuple[Path, ProjectStore]) -> None:
+    root, store = workspace
+    audio = root / "input" / "song.flac"
+    audio.write_bytes(b"x")
+    store.create_project("song", audio)
+    lrc_dir = root / "output" / "slices" / "song" / "lrc"
+    vad_dir = root / "output" / "slices" / "song" / "vad"
+    lrc_dir.mkdir(parents=True)
+    vad_dir.mkdir(parents=True)
+    (lrc_dir / "manifest.json").write_text('{"slices": []}', encoding="utf-8")
+    (vad_dir / "manifest.json").write_text('{"slices": []}', encoding="utf-8")
+
+    project = store.get_project("song")
+    project.stages[StageName.CONVERT].inputs = {
+        "slices_dir": "output/slices/song/vad",
+        "manifest": "output/slices/song/lrc/manifest.json",
+        "output_dir": "output/converted/song/lrc",
+        "slice_mode": "lrc",
+        "active_slice_mode": "lrc",
+    }
+    store.save_project(project)
+
+    resolved = store.resolve_stage_inputs("song", StageName.CONVERT, {"mode": "slice_batch"})
+    assert resolved["slices_dir"].replace("\\", "/").endswith("slices/song/vad")
+    assert resolved["manifest"].replace("\\", "/").endswith("slices/song/vad/manifest.json")
+    assert resolved["output_dir"].replace("\\", "/").endswith("converted/song/vad")
+    assert resolved["slice_mode"] == "vad"
+
+
+def test_active_slice_mode_prefers_vad_when_both_artifact_sets_exist(
+    workspace: tuple[Path, ProjectStore],
+) -> None:
+    root, store = workspace
+    audio = root / "input" / "song.flac"
+    audio.write_bytes(b"x")
+    lrc = root / "input" / "song.lrc"
+    lrc.write_text("[00:00.00]x", encoding="utf-8")
+    store.create_project("song", audio, lrc_path=lrc)
+
+    project = store.get_project("song")
+    project.stages[StageName.SLICE].artifacts = {
+        "lrc": {"slices_dir": "output/slices/song/lrc"},
+        "vad": {"slices_dir": "output/slices/song/vad"},
+    }
+    project.stages[StageName.SLICE].params = {"mode": "vad", "active_slice_mode": "vad"}
+    store.save_project(project)
+
+    assert store._active_slice_mode(project) == "vad"
+
+
+def test_resolve_merge_original_vocals_from_instrumental_override(
+    workspace: tuple[Path, ProjectStore],
+) -> None:
+    root, store = workspace
+    audio = root / "input" / "mysong.flac"
+    audio.write_bytes(b"x")
+    store.create_project("mysong", audio)
+
+    sep = root / "output" / "separated"
+    sep.mkdir(parents=True, exist_ok=True)
+    test_vocals = sep / "test_(vocals)_mel_band_roformer_kim_ft_unwa.flac"
+    test_other = sep / "test_(other)_mel_band_roformer_kim_ft_unwa.flac"
+    test_vocals.write_bytes(b"v")
+    test_other.write_bytes(b"i")
+
+    converted = root / "output" / "converted" / "mysong" / "vad"
+    converted.mkdir(parents=True)
+    (converted / "slice_000.flac").write_bytes(b"c")
+
+    project = store.get_project("mysong")
+    project.stages[StageName.MERGE].inputs = {
+        "original_vocals": "output/separated/mysong_(vocals)_mel_band_roformer_kim_ft_unwa.flac",
+        "instrumental": "output/separated/test_(other)_mel_band_roformer_kim_ft_unwa.flac",
+        "vocals": "output/converted/mysong/vad",
+        "merge_mode": "slice_stitch",
+    }
+    store.save_project(project)
+
+    resolved = store.resolve_stage_inputs(
+        "mysong",
+        StageName.MERGE,
+        {
+            "merge_mode": "slice_stitch",
+            "instrumental": "output/separated/test_(other)_mel_band_roformer_kim_ft_unwa.flac",
+        },
+    )
+    assert resolved["original_vocals"].replace("\\", "/").endswith(
+        "output/separated/test_(vocals)_mel_band_roformer_kim_ft_unwa.flac"
+    )
+
+
+def test_resolve_merge_slice_mode_follows_vad_converted_dir(
+    workspace: tuple[Path, ProjectStore],
+) -> None:
+    root, store = workspace
+    audio = root / "input" / "song.flac"
+    audio.write_bytes(b"x")
+    store.create_project("song", audio)
+
+    converted_vad = root / "output" / "converted" / "song" / "vad"
+    converted_vad.mkdir(parents=True)
+    (converted_vad / "slice_000.flac").write_bytes(b"c")
+    slices_lrc = root / "output" / "slices" / "song" / "lrc"
+    slices_vad = root / "output" / "slices" / "song" / "vad"
+    slices_lrc.mkdir(parents=True)
+    slices_vad.mkdir(parents=True)
+    (slices_lrc / "manifest.json").write_text('{"slices": []}', encoding="utf-8")
+    (slices_vad / "manifest.json").write_text('{"slices": []}', encoding="utf-8")
+
+    project = store.get_project("song")
+    project.stages[StageName.SLICE].params = {"mode": "vad", "active_slice_mode": "vad"}
+    project.stages[StageName.CONVERT].artifacts = {
+        "vad": {"converted_dir": "output/converted/song/vad"},
+    }
+    project.stages[StageName.MERGE].inputs = {
+        "vocals": "output/converted/song/vad",
+        "slices_dir": "output/slices/song/lrc",
+        "manifest": "output/slices/song/lrc/manifest.json",
+        "slice_mode": "lrc",
+        "active_slice_mode": "lrc",
+        "merge_mode": "slice_stitch",
+    }
+    store.save_project(project)
+
+    resolved = store.resolve_stage_inputs(
+        "song",
+        StageName.MERGE,
+        {"merge_mode": "slice_stitch", "slice_mode": "vad", "active_slice_mode": "vad"},
+    )
+    assert resolved["slice_mode"] == "vad"
+    assert resolved["slices_dir"].replace("\\", "/").endswith("slices/song/vad")
+    assert resolved["manifest"].replace("\\", "/").endswith("slices/song/vad/manifest.json")
+    assert resolved["output_dir"].replace("\\", "/").endswith("merged/song/vad")
+
+
+def test_resolve_slice_output_dir_follows_mode_override(
+    workspace: tuple[Path, ProjectStore],
+) -> None:
+    root, store = workspace
+    audio = root / "input" / "song.flac"
+    audio.write_bytes(b"x")
+    lrc = root / "input" / "song.lrc"
+    lrc.write_text("[00:00.00]x", encoding="utf-8")
+    store.create_project("song", audio, lrc_path=lrc)
+
+    project = store.get_project("song")
+    project.stages[StageName.SLICE].inputs = {
+        "mode": "vad",
+        "output_dir": "output/slices/song/vad",
+    }
+    store.save_project(project)
+
+    resolved = store.resolve_stage_inputs("song", StageName.SLICE, {"mode": "lrc"})
+    assert resolved["mode"] == "lrc"
+    assert resolved["output_dir"].replace("\\", "/").endswith("slices/song/lrc")
+
+
+def test_active_slice_mode_honors_active_slice_mode_override(
+    workspace: tuple[Path, ProjectStore],
+) -> None:
+    root, store = workspace
+    audio = root / "input" / "song.flac"
+    audio.write_bytes(b"x")
+    store.create_project("song", audio)
+    project = store.get_project("song")
+    project.stages[StageName.SLICE].params = {"mode": "vad", "active_slice_mode": "vad"}
+    store.save_project(project)
+
+    assert store._active_slice_mode(project, {"active_slice_mode": "lrc"}) == "lrc"

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
@@ -17,6 +17,7 @@ import { projectDefaultsKey, useProjectDefaults } from '@/hooks/useProjectDefaul
 import { useStageParams } from '@/hooks/useStageParams'
 import { useStageRun } from '@/hooks/useStageRun'
 import { api } from '@/lib/api'
+import { mediaUrlFromPath, withMediaCacheBuster } from '@/lib/media'
 import { MERGE_MODES, MERGE_SLICE, MERGE_WHOLE, MERGE_TAB_LABELS } from '@/lib/modes'
 import type { MergeMode, StageParamValues } from '@/types/pipeline'
 
@@ -26,6 +27,7 @@ function MergePageInner({ projectId, initialMode }: { projectId: string; initial
   const [instrumentalOverride, setInstrumentalOverride] = useState('')
   const [referenceOverride, setReferenceOverride] = useState('')
   const [manifestPreview, setManifestPreview] = useState('')
+  const [mixedRevision, setMixedRevision] = useState(0)
 
   const { data: defaults } = useProjectDefaults(projectId)
   const { data: schema, isLoading: schemaLoading } = useStageParams({ stage: 'merge' })
@@ -35,11 +37,19 @@ function MergePageInner({ projectId, initialMode }: { projectId: string; initial
   useEffect(() => {
     if (stageRun.status === 'done') {
       toast.success('合并完成')
+      setMixedRevision((revision) => revision + 1)
       queryClient.invalidateQueries({ queryKey: projectDefaultsKey(projectId) })
     } else if (stageRun.status === 'failed' || stageRun.status === 'error') {
       toast.error(stageRun.errorMessage ?? '合并运行失败')
     }
   }, [stageRun.status, stageRun.errorMessage, projectId, queryClient])
+
+  const mixedPreviewSrc = useMemo(() => {
+    const fromRun = mediaUrlFromPath(stageRun.result?.artifacts?.mixed as string | undefined)
+    const fromDefaults = defaults?.artifacts.mixed ?? null
+    const base = fromRun ?? fromDefaults
+    return base ? withMediaCacheBuster(base, mixedRevision) : null
+  }, [defaults?.artifacts.mixed, mixedRevision, stageRun.result])
 
   useEffect(() => {
     const activeSliceMode = defaults?.active_slice_mode ?? 'lrc'
@@ -61,8 +71,17 @@ function MergePageInner({ projectId, initialMode }: { projectId: string; initial
     if (instrumentalOverride.trim()) params.instrumental = instrumentalOverride.trim()
     if (referenceOverride.trim()) params.reference = referenceOverride.trim()
     params.profile = values.profile ?? defaults?.merge_profile ?? 'full'
-    params.slice_mode = defaults?.active_slice_mode ?? 'lrc'
-    params.active_slice_mode = defaults?.active_slice_mode ?? 'lrc'
+    const vocalsPath =
+      mode === MERGE_SLICE
+        ? vocalsOverride.trim() || defaults?.merge_vocals_dir || ''
+        : vocalsOverride.trim()
+    const inferredFromVocals =
+      mode === MERGE_SLICE && vocalsPath
+        ? vocalsPath.replace(/\\/g, '/').match(/\/(lrc|vad)\/?(?:\/|$)/i)?.[1]?.toLowerCase()
+        : null
+    const sliceMode = inferredFromVocals ?? defaults?.active_slice_mode ?? 'lrc'
+    params.slice_mode = sliceMode
+    params.active_slice_mode = sliceMode
     stageRun.run(params)
   }
 
@@ -151,7 +170,11 @@ function MergePageInner({ projectId, initialMode }: { projectId: string; initial
                 <Textarea value={manifestPreview} readOnly rows={6} data-testid="merge-manifest-preview" />
               </div>
             )}
-            <ArtifactAudio label="合并结果 (mixed)" src={defaults?.artifacts.mixed} />
+            <ArtifactAudio
+              label="合并结果 (mixed)"
+              src={mixedPreviewSrc}
+              reloadKey={mixedRevision}
+            />
           </CardContent>
         </Card>
       </div>

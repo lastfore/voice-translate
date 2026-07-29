@@ -127,6 +127,48 @@ def converted_slice_audio_url(project_id: str, slice_mode: str, slice_id: str) -
     return media_url_for(str(converted_dir / file_name))
 
 
+def load_converted_slice_table(project_id: str, slice_mode: str) -> dict[str, Any]:
+    """List slices with converted output URLs when the converted file exists."""
+    normalized = paths.normalize_slice_mode(slice_mode)
+    entries = load_manifest_entries(project_id, normalized)
+    converted_dir = paths.resolve_converted_mode_dir(project_id, normalized)
+
+    root = paths.get_root().resolve()
+    dir_path = converted_dir.resolve().relative_to(root).as_posix() if converted_dir else None
+
+    rows: list[dict[str, Any]] = []
+    for item in entries:
+        slice_id = str(item.get("id", ""))
+        file_name = str(item.get("file", "") or "")
+        audio_url = None
+        if converted_dir and file_name:
+            converted_path = converted_dir / file_name
+            if converted_path.is_file():
+                audio_url = media_url_for(str(converted_path))
+        rows.append(
+            {
+                "id": slice_id,
+                "start_ms": item.get("start_ms"),
+                "end_ms": item.get("end_ms"),
+                "text": item.get("text") or "",
+                "file": file_name,
+                "status": "converted" if audio_url else "",
+                "audio_url": audio_url,
+            }
+        )
+
+    first_audio_url = next((row["audio_url"] for row in rows if row["audio_url"]), None)
+
+    return {
+        "mode": normalized,
+        "dir_path": dir_path,
+        "rows": rows,
+        "first_audio_url": first_audio_url,
+        "converted_count": sum(1 for row in rows if row["audio_url"]),
+        "total_count": len(rows),
+    }
+
+
 def load_overrides(project_id: str, slice_mode: str) -> dict[str, Any]:
     """Return the overrides sidecar for *project_id* / *slice_mode* as JSON.
 

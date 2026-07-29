@@ -28,7 +28,7 @@ function SlicePageInner({ projectId, initialMode }: { projectId: string; initial
 
   const { data: defaults } = useProjectDefaults(projectId)
   const { data: schema, isLoading: schemaLoading } = useStageParams({ stage: 'slice' })
-  const { data: sliceTable, isLoading: slicesLoading, refetch: refetchSlices } = useSliceTable(projectId, mode)
+  const { data: sliceTable, isLoading: slicesLoading } = useSliceTable(projectId, mode)
   const stageRun = useStageRun(projectId, 'slice')
   const queryClient = useQueryClient()
 
@@ -46,7 +46,7 @@ function SlicePageInner({ projectId, initialMode }: { projectId: string; initial
     if (stageRun.status === 'done') {
       toast.success('切片完成')
       queryClient.invalidateQueries({ queryKey: projectDefaultsKey(projectId) })
-      refetchSlices()
+      queryClient.invalidateQueries({ queryKey: ['slices', projectId] })
     } else if (stageRun.status === 'failed' || stageRun.status === 'error') {
       toast.error(stageRun.errorMessage ?? '切片运行失败')
     }
@@ -57,6 +57,8 @@ function SlicePageInner({ projectId, initialMode }: { projectId: string; initial
 
   const handleSubmit = (values: StageParamValues) => {
     const params: StageParamValues = { ...values, mode }
+    params.slice_mode = mode
+    params.active_slice_mode = mode
     if (vocalsOverride.trim()) params.vocals = vocalsOverride.trim()
     if (mode === 'lrc' && lrcOverride.trim()) params.lrc = lrcOverride.trim()
     stageRun.run(params)

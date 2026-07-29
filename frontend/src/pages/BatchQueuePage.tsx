@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 
 import { StageLogPanel } from '@/components/pipeline/StageLogPanel'
@@ -24,8 +24,13 @@ export function BatchQueuePage() {
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([])
   const [selectedStages, setSelectedStages] = useState<StageName[]>(['separate'])
   const [convertMode, setConvertMode] = useState('slice_batch')
-  const [sliceMode, setSliceMode] = useState('lrc')
+  const [sliceMode, setSliceMode] = useState('')
   const [mergeProfile, setMergeProfile] = useState('full')
+
+  useEffect(() => {
+    const ids = new Set((projects ?? []).map((project) => project.id))
+    setSelectedProjectIds((prev) => prev.filter((id) => ids.has(id)))
+  }, [projects])
 
   const handleEnqueue = async () => {
     if (selectedProjectIds.length === 0) {
@@ -37,7 +42,11 @@ export function BatchQueuePage() {
         await api.post('/api/batch/enqueue', {
           project_id: projectId,
           stages: selectedStages,
-          params: { convert_mode: convertMode, slice_mode: sliceMode, profile: mergeProfile },
+          params: {
+            convert_mode: convertMode,
+            ...(sliceMode.trim() ? { slice_mode: sliceMode.trim() } : {}),
+            profile: mergeProfile,
+          },
         })
       }
       toast.success(`已加入 ${selectedProjectIds.length} 个项目到批量队列`)
@@ -118,7 +127,11 @@ export function BatchQueuePage() {
               </div>
               <div className="space-y-1.5">
                 <Label>切片模式</Label>
-                <Input value={sliceMode} onChange={(e) => setSliceMode(e.target.value)} />
+                <Input
+                  value={sliceMode}
+                  onChange={(e) => setSliceMode(e.target.value)}
+                  placeholder="留空则跟随各项目设置"
+                />
               </div>
               <div className="space-y-1.5">
                 <Label>合并 profile</Label>

@@ -6,10 +6,14 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pipeline import paths
 from pipeline.models import ConvertMode, ProgressEvent, StageName
 from pipeline.venv_runner import run_subprocess, seed_vc_python
+
+if TYPE_CHECKING:
+    from pipeline.stage_log import StageLogWriter
 
 _PROGRESS_RE = re.compile(r"\[(\d+)/(\d+)\]\s*(.+)")
 
@@ -45,6 +49,7 @@ def run_convert(
     slice_ids: list[str] | None = None,
     overrides_path: Path | None = None,
     on_progress: Callable[[ProgressEvent], None] | None = None,
+    stage_log: StageLogWriter | None = None,
 ) -> ConvertResult:
     reference = Path(reference).resolve()
     if not reference.is_file():
@@ -62,7 +67,7 @@ def run_convert(
                     job_id=job_id,
                     percent=percent,
                     message=message,
-                    log_line=log_line,
+                    log_line=None if stage_log else log_line,
                 )
             )
 
@@ -106,9 +111,13 @@ def run_convert(
             cmd.append("--no-fp16")
 
         def _line(line: str) -> None:
-            _emit(line, 50.0, line)
+            if stage_log:
+                stage_log.line(line)
+            _emit(line, 50.0)
 
         _emit("Converting full track", 0.0)
+        if stage_log:
+            stage_log.cmd([str(x) for x in cmd], cwd=str(root), python=str(seed_vc_python()))
         result = run_subprocess(cmd, cwd=root, env=env, on_line=_line)
         if result.returncode != 0:
             raise RuntimeError((result.stdout or result.stderr or "convert_full failed").strip())
@@ -183,16 +192,20 @@ def run_convert(
 
     def _batch_line(line: str) -> None:
         nonlocal converted, total
+        if stage_log:
+            stage_log.line(line)
         match = _PROGRESS_RE.search(line)
         if match:
             converted = int(match.group(1))
             total = int(match.group(2))
             pct = (converted / total * 100.0) if total else 0.0
-            _emit(f"[{converted}/{total}] {match.group(3)}", pct, line)
+            _emit(f"[{converted}/{total}] {match.group(3)}", pct)
         else:
-            _emit(line, (converted / total * 100.0) if total else 0.0, line)
+            _emit(line, (converted / total * 100.0) if total else 0.0)
 
     _emit("Starting slice batch conversion", 0.0)
+    if stage_log:
+        stage_log.cmd([str(x) for x in cmd], cwd=str(root), python=str(seed_vc_python()))
     result = run_subprocess(cmd, cwd=root, env=env, on_line=_batch_line)
     if result.returncode != 0:
         raise RuntimeError((result.stdout or result.stderr or "convert-slices failed").strip())

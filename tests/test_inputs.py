@@ -101,7 +101,30 @@ def test_validate_pipeline_chain_success(store_with_project: tuple[ProjectStore,
     assert "merge" in plan
 
 
-def test_suggest_next_stage(store_with_project: tuple[ProjectStore, str, Path]) -> None:
+def test_validate_pipeline_chain_inherits_project_slice_mode(
+    store_with_project: tuple[ProjectStore, str, Path],
+) -> None:
+    store, pid, root = store_with_project
+    ref = root / "input" / "ref.wav"
+    (root / "input" / "proj.lrc").write_text("[00:00.00]x", encoding="utf-8")
+    vad_dir = root / "output" / "slices" / "proj" / "vad"
+    vad_dir.mkdir(parents=True)
+    (vad_dir / "manifest.json").write_text("{}", encoding="utf-8")
+
+    project = store.get_project(pid)
+    project.stages[StageName.SLICE].params = {"mode": "vad", "active_slice_mode": "vad"}
+    store.save_project(project)
+
+    ok, plan = store.validate_pipeline_chain(
+        pid,
+        [StageName.CONVERT],
+        convert_mode=ConvertMode.SLICE_BATCH,
+        reference=str(ref),
+    )
+    assert ok, plan
+    assert isinstance(plan, dict)
+    assert plan["convert"]["slice_mode"] == "vad"
+    assert plan["convert"]["output_dir"].replace("\\", "/").endswith("converted/proj/vad")
     store, pid, _ = store_with_project
     # Has vocals separated + slices + converted -> suggest merge
     assert store.suggest_next_stage(pid) == StageName.MERGE

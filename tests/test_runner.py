@@ -118,6 +118,59 @@ def test_run_merge_mocked(runner_workspace: tuple[ProjectStore, StageRunner, str
     assert store.get_project(pid).stages[StageName.MERGE].status == StageStatus.DONE
 
 
+def test_finalize_stage_keeps_resolved_paths_over_stale_params(
+    runner_workspace: tuple[ProjectStore, StageRunner, str, Path],
+) -> None:
+    store, runner, pid, root = runner_workspace
+    vocals = root / "output" / "separated" / "song_(Vocals)_m.flac"
+    vocals.write_bytes(b"v")
+    vad_dir = root / "output" / "slices" / pid / "vad"
+    vad_dir.mkdir(parents=True)
+    (vad_dir / "manifest.json").write_text('{"slices": []}', encoding="utf-8")
+    converted_dir = root / "output" / "converted" / pid / "vad"
+    converted_dir.mkdir(parents=True)
+
+    captured: dict[str, Path | None] = {}
+
+    def _fake_convert(project_id, **kwargs):
+        captured["output_dir"] = kwargs.get("output_dir")
+        from pipeline.stages.convert import ConvertResult
+
+        return ConvertResult(
+            mode="slice_batch",
+            converted_dir=converted_dir,
+            converted_count=1,
+            total_count=1,
+        )
+
+    ref = root / "input" / pid / "reference.wav"
+    ref.parent.mkdir(parents=True)
+    ref.write_bytes(b"r")
+
+    stale_params = {
+        "mode": "slice_batch",
+        "reference": str(ref),
+        "slices_dir": str(vad_dir),
+        "manifest": str(root / "output" / "slices" / pid / "lrc" / "manifest.json"),
+        "output_dir": str(root / "output" / "converted" / pid / "lrc"),
+        "slice_mode": "lrc",
+        "active_slice_mode": "lrc",
+        "diffusion_steps": 40,
+    }
+
+    with patch("pipeline.runner.run_convert", side_effect=_fake_convert):
+        result = runner.run_stage(pid, StageName.CONVERT, stale_params)
+
+    assert result.success
+    assert captured["output_dir"] == converted_dir.resolve()
+    project = store.get_project(pid)
+    saved = project.stages[StageName.CONVERT].params
+    assert saved["output_dir"].replace("\\", "/").endswith("converted/song/vad")
+    assert saved["manifest"].replace("\\", "/").endswith("slices/song/vad/manifest.json")
+    assert saved["slice_mode"] == "vad"
+    assert saved["diffusion_steps"] == 40
+
+
 def test_run_separate_mocked(runner_workspace: tuple[ProjectStore, StageRunner, str, Path]) -> None:
     store, runner, pid, root = runner_workspace
     mix = root / "input" / "song.flac"
@@ -132,3 +185,45 @@ def test_run_separate_mocked(runner_workspace: tuple[ProjectStore, StageRunner, 
     project = store.get_project(pid)
     assert project.stages[StageName.SEPARATE].status == StageStatus.DONE
     assert "vocals" in project.stages[StageName.SEPARATE].artifacts
+
+
+def test_run_pipeline_forwards_slice_mode_to_convert_and_merge(
+    runner_workspace: tuple[ProjectStore, StageRunner, str, Path],
+) -> None:
+    store, runner, pid, root = runner_workspace
+    lrc_dir = root / "output" / "slices" / pid / "lrc"
+    lrc_dir.mkdir(parents=True)
+    (lrc_dir / "manifest.json").write_text('{"slices": []}', encoding="utf-8")
+    (lrc_dir / "slice_000.flac").write_bytes(b"s")
+    converted = root / "output" / "converted" / pid / "lrc"
+    converted.mkdir(parents=True)
+    vocals = root / "output" / "separated" / "song_(Vocals)_m.flac"
+    vocals.parent.mkdir(parents=True, exist_ok=True)
+    vocals.write_bytes(b"v")
+    inst = root / "output" / "separated" / "song_(Instrumental)_m.flac"
+    inst.write_bytes(b"i")
+    ref = root / "input" / pid / "reference.wav"
+    ref.parent.mkdir(parents=True)
+    ref.write_bytes(b"r")
+
+    captured: list[tuple[StageName, dict]] = []
+
+    def _fake_run_stage(project_id, stage, params, on_progress=None, on_job_id=None):
+        captured.append((stage, dict(params)))
+        from pipeline.models import StageResult
+
+        return StageResult(project_id, stage, True, artifacts={})
+
+    with patch.object(runner.store, "validate_pipeline_chain", return_value=(True, {})):
+        with patch.object(runner, "run_stage", side_effect=_fake_run_stage):
+            runner.run_pipeline(
+                pid,
+                stages=[StageName.CONVERT, StageName.MERGE],
+                slice_mode="lrc",
+                reference=str(ref),
+            )
+
+    assert captured[0][0] == StageName.CONVERT
+    assert captured[0][1]["slice_mode"] == "lrc"
+    assert captured[1][0] == StageName.MERGE
+    assert captured[1][1]["active_slice_mode"] == "lrc"

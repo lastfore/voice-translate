@@ -8,11 +8,15 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pipeline import paths
-from pipeline.models import ProgressEvent, SliceMode, StageName
+from pipeline.models import ProgressEvent, SliceMode, StageName, rel_path
 from pipeline.slice_overrides import load as load_overrides
 from pipeline.slice_overrides import merge_after_reslice, save as save_overrides
+
+if TYPE_CHECKING:
+    from pipeline.stage_log import StageLogWriter
 
 
 @dataclass
@@ -48,6 +52,7 @@ def run_slice(
     min_silence_ms: int = 500,
     speech_pad_ms: int = 80,
     on_progress: Callable[[ProgressEvent], None] | None = None,
+    stage_log: StageLogWriter | None = None,
 ) -> SliceResult:
     vocals = Path(vocals).resolve()
     output_dir = Path(output_dir).resolve()
@@ -65,13 +70,38 @@ def run_slice(
                     job_id=job_id,
                     percent=percent,
                     message=message,
-                    log_line=message,
+                    log_line=None if stage_log else message,
                 )
+            )
+
+    slice_mode = paths.normalize_slice_mode(mode)
+    root = paths.get_root()
+
+    if mode == SliceMode.LRC.value:
+        if lrc_path is None:
+            raise ValueError("LRC mode requires lrc_path")
+        lrc_resolved = Path(lrc_path).resolve()
+        if stage_log:
+            stage_log.exec_context(
+                handler="scripts/slice-vocals-lrc.py",
+                mode="lrc",
+                lrc_path=rel_path(lrc_resolved, root),
+                vocals=rel_path(vocals, root),
+                output_dir=rel_path(output_dir, root),
+            )
+    else:
+        if stage_log:
+            stage_log.exec_context(
+                handler="scripts/slice-vocals.py",
+                mode="vad",
+                vad_threshold=str(vad_threshold),
+                min_speech_ms=str(min_speech_ms),
+                min_silence_ms=str(min_silence_ms),
+                speech_pad_ms=str(speech_pad_ms),
             )
 
     _emit("Starting slice", 0.0)
 
-    slice_mode = paths.normalize_slice_mode(mode)
     overrides_path = paths.slices_overrides_path(project_id, slice_mode)
     old_overrides = load_overrides(overrides_path)
     old_manifest_path = output_dir / "manifest.json"
@@ -112,5 +142,5 @@ def run_slice(
         )
         save_overrides(overrides_path, merged)
 
-    _emit(f"Wrote {count} slices", 100.0)
+    _emit("Slice complete", 100.0)
     return SliceResult(slices_dir=output_dir, manifest=manifest_path, slice_count=count)

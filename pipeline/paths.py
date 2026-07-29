@@ -11,6 +11,7 @@ from typing import Literal
 DeleteScope = Literal["metadata", "artifacts", "all"]
 
 _VOCALS_STEM_RE = re.compile(r"^(.+?)_\(Vocals\)_", re.IGNORECASE)
+_INSTRUMENTAL_STEM_RE = re.compile(r"^(.+?)_\((?:other|instrumental)\)_(.+)$", re.IGNORECASE)
 
 
 def get_root() -> Path:
@@ -108,6 +109,19 @@ def separated_instrumental_path(project_id: str) -> Path | None:
     return None
 
 
+def paired_vocals_from_instrumental(instrumental: Path) -> Path | None:
+    """Infer the matching separated vocals stem from an instrumental/other stem path."""
+    match = _INSTRUMENTAL_STEM_RE.match(instrumental.name)
+    if not match:
+        return None
+    prefix, suffix = match.group(1), match.group(2)
+    for stem_tag in ("(vocals)", "(Vocals)"):
+        candidate = instrumental.parent / f"{prefix}_{stem_tag}_{suffix}"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def slices_dir(project_id: str) -> Path:
     return output_dir() / "slices" / project_id
 
@@ -119,6 +133,25 @@ def normalize_slice_mode(mode: str | None) -> str:
     if mode in SLICE_MODES:
         return mode
     return "lrc"
+
+
+def infer_slice_mode_from_slices_dir(path: str | Path | None, project_id: str | None = None) -> str | None:
+    """Infer ``lrc`` / ``vad`` from a slices directory path when unambiguous."""
+    if not path:
+        return None
+    normalized = str(path).replace("\\", "/").rstrip("/")
+    parts = [part.lower() for part in normalized.split("/") if part]
+    for mode in reversed(SLICE_MODES):
+        if mode in parts:
+            return mode
+    if project_id:
+        marker = f"/slices/{project_id}/"
+        idx = normalized.lower().find(marker)
+        if idx >= 0:
+            tail = normalized[idx + len(marker) :].split("/", 1)[0].lower()
+            if tail in SLICE_MODES:
+                return tail
+    return None
 
 
 def slices_mode_dir(project_id: str, mode: str) -> Path:

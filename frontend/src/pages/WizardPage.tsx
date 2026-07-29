@@ -13,9 +13,22 @@ import { projectDefaultsKey, useProjectDefaults } from '@/hooks/useProjectDefaul
 import { usePipelineRun } from '@/hooks/usePipelineRun'
 import { useStageParams } from '@/hooks/useStageParams'
 import { useQueryClient } from '@tanstack/react-query'
-import type { StageName, StageParamValues } from '@/types/pipeline'
+import type { ProjectDefaults, StageName, StageParamValues } from '@/types/pipeline'
 
 const STAGES: StageName[] = ['separate', 'slice', 'convert', 'merge']
+
+function buildPipelineParams(defaults: ProjectDefaults): StageParamValues {
+  const mode = defaults.active_slice_mode
+  const mergeParams = defaults.stage_params.merge ?? {}
+  return {
+    slice_mode: mode,
+    active_slice_mode: mode,
+    convert_mode: defaults.convert_mode,
+    reference: defaults.reference || undefined,
+    profile: (mergeParams.profile as string | undefined) ?? defaults.merge_profile,
+    merge_profile: (mergeParams.profile as string | undefined) ?? defaults.merge_profile,
+  }
+}
 
 export function WizardPage() {
   const { projectId } = useProject()
@@ -40,11 +53,11 @@ export function WizardPage() {
   const handleRunFrom = () => {
     const idx = STAGES.indexOf(activeStage)
     const stages = STAGES.slice(idx)
-    pipelineRun.run({ stages, params: defaults.stage_params })
+    pipelineRun.run({ stages, params: buildPipelineParams(defaults) })
   }
 
   const handleRunAll = () => {
-    pipelineRun.run({ params: defaults.stage_params })
+    pipelineRun.run({ params: buildPipelineParams(defaults) })
   }
 
   if (pipelineRun.status === 'done') {

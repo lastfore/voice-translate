@@ -134,6 +134,49 @@ def test_defaults_prefers_slice_stage_mode(api_workspace) -> None:
     assert resp.json()["slice_mode"] == "vad"
 
 
+def test_defaults_artifact_urls_use_media_endpoint(api_workspace, sample_audio: Path) -> None:
+    from pipeline.models import Project, StageName, StageRecord, StageStatus, utc_now_iso
+    from pipeline.store import ProjectStore
+
+    store = ProjectStore(api_workspace.root)
+    now = utc_now_iso()
+    project = Project(id="media", display_name="media", created_at=now, updated_at=now)
+    sep_dir = api_workspace.root / "output" / "separated"
+    sep_dir.mkdir(parents=True, exist_ok=True)
+    vocals = sep_dir / "media_(vocals)_m.flac"
+    vocals.write_bytes(b"v")
+    inst = sep_dir / "media_(other)_m.flac"
+    inst.write_bytes(b"i")
+    merged = api_workspace.root / "output" / "merged" / "media" / "vad" / "mixed.flac"
+    merged.parent.mkdir(parents=True, exist_ok=True)
+    merged.write_bytes(b"m")
+
+    project.stages[StageName.SEPARATE] = StageRecord(
+        status=StageStatus.DONE,
+        artifacts={"vocals": str(vocals.relative_to(api_workspace.root)).replace("\\", "/")},
+    )
+    project.stages[StageName.SLICE] = StageRecord(
+        status=StageStatus.DONE,
+        params={"mode": "vad", "active_slice_mode": "vad"},
+    )
+    project.stages[StageName.MERGE] = StageRecord(
+        status=StageStatus.DONE,
+        artifacts={
+            "vad": {
+                "mixed": str(merged.relative_to(api_workspace.root)).replace("\\", "/"),
+            }
+        },
+    )
+    store.save_project(project)
+
+    client = TestClient(api_workspace.app)
+    resp = client.get("/api/projects/media/defaults")
+    assert resp.status_code == 200
+    artifacts = resp.json()["artifacts"]
+    assert artifacts["sep_vocals"] == "/api/media?path=output/separated/media_(vocals)_m.flac"
+    assert artifacts["mixed"] == "/api/media?path=output/merged/media/vad/mixed.flac"
+
+
 def test_delete_requires_confirmation(api_workspace, sample_audio: Path) -> None:
     client = TestClient(api_workspace.app)
     with sample_audio.open("rb") as fh:

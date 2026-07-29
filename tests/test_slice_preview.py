@@ -81,7 +81,48 @@ def test_audio_for_slice_missing_file(root: Path) -> None:
     assert slice_service.slice_audio_url("demo", "lrc", "slice_000") is None
 
 
+def test_load_converted_slice_table(root: Path) -> None:
+    mode_dir = root / "output" / "slices" / "demo" / "vad"
+    mode_dir.mkdir(parents=True)
+    (mode_dir / "slice_000.flac").write_bytes(b"x")
+    (mode_dir / "slice_001.flac").write_bytes(b"x")
+    manifest = {
+        "slices": [
+            {"id": "slice_000", "file": "slice_000.flac", "start_ms": 0, "end_ms": 1200, "text": "a"},
+            {"id": "slice_001", "file": "slice_001.flac", "start_ms": 1200, "end_ms": 2400, "text": "b"},
+        ]
+    }
+    (mode_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    converted_dir = root / "output" / "converted" / "demo" / "vad"
+    converted_dir.mkdir(parents=True)
+    (converted_dir / "slice_000.flac").write_bytes(b"x")
+
+    table = slice_service.load_converted_slice_table("demo", "vad")
+    assert table["total_count"] == 2
+    assert table["converted_count"] == 1
+    assert table["rows"][0]["status"] == "converted"
+    assert table["rows"][0]["audio_url"] is not None
+    assert table["rows"][1]["status"] == ""
+    assert table["rows"][1]["audio_url"] is None
+    assert table["first_audio_url"] is not None
+
+
 def test_resolve_convert_preview_slice_batch(root: Path) -> None:
+    mode_dir = root / "output" / "slices" / "demo" / "lrc"
+    mode_dir.mkdir(parents=True)
+    manifest = {"slices": [{"id": "slice_000", "file": "demo_slice_000.flac", "start_ms": 0, "end_ms": 1}]}
+    (mode_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    converted_dir = root / "output" / "converted" / "demo" / "lrc"
+    converted_dir.mkdir(parents=True)
+    (converted_dir / "demo_slice_000.flac").write_bytes(b"x")
+
+    url = media_service.resolve_convert_preview_audio("demo", "slice_batch", "lrc")
+    assert url is not None
+    assert "demo_slice_000.flac" in url
+
+
+def test_resolve_convert_preview_slice_batch_legacy_dir_only(root: Path) -> None:
     mode_dir = root / "output" / "converted" / "demo" / "lrc"
     mode_dir.mkdir(parents=True)
     (mode_dir / "demo_slice_000.flac").write_bytes(b"x")

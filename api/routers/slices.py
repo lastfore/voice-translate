@@ -40,6 +40,16 @@ def get_slices(
     return slice_service.load_slice_table(project_id, mode)
 
 
+@router.get("/{project_id}/converted-slices")
+def get_converted_slices(
+    project_id: str,
+    mode: str = Query("lrc"),
+    store: ProjectStore = Depends(get_store),
+) -> dict[str, Any]:
+    _ensure_project_exists(store, project_id)
+    return slice_service.load_converted_slice_table(project_id, mode)
+
+
 @router.get("/{project_id}/slices/{slice_id}/audio")
 def get_slice_audio(
     project_id: str,

@@ -25,7 +25,7 @@ def _create_project(client: TestClient, sample_audio: Path, project_id: str) -> 
 
 
 def _fake_separate(delay: float = 0.1):
-    def _fn(project_id, mix_audio, *, model, on_progress=None, on_log_line=None):
+    def _fn(project_id, mix_audio, *, model, on_progress=None, on_log_line=None, stage_log=None, **kwargs):
         time.sleep(delay)
         if on_progress:
             on_progress(
@@ -117,7 +117,7 @@ async def test_batch_run_is_serial(api_workspace, sample_audio: Path) -> None:
 
     call_count = {"active": 0, "max": 0}
 
-    def _fake_separate_tracking(project_id, mix_audio, *, model, on_progress=None, on_log_line=None):
+    def _fake_separate_tracking(project_id, mix_audio, *, model, on_progress=None, on_log_line=None, stage_log=None, **kwargs):
         call_count["active"] += 1
         call_count["max"] = max(call_count["max"], call_count["active"])
         time.sleep(0.05)

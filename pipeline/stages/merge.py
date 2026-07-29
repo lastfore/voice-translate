@@ -7,9 +7,13 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pipeline import paths
 from pipeline.models import ProgressEvent, StageName
+
+if TYPE_CHECKING:
+    from pipeline.stage_log import StageLogWriter
 
 
 @dataclass
@@ -47,6 +51,7 @@ def run_merge(
     instrumental_gain_db: float = 0.0,
     skip_mastering: bool = False,
     on_progress: Callable[[ProgressEvent], None] | None = None,
+    stage_log: StageLogWriter | None = None,
 ) -> MergeResult:
     vocals = Path(vocals).resolve()
     instrumental = Path(instrumental).resolve()
@@ -68,15 +73,28 @@ def run_merge(
                     job_id=job_id,
                     percent=percent,
                     message=message,
-                    log_line=message,
+                    log_line=None if stage_log else message,
                 )
             )
+
+    if stage_log:
+        stage_log.exec_context(
+            handler="scripts/merge-audio.py",
+            profile=profile,
+            clean_instrumental=str(clean_instrumental).lower(),
+            skip_mastering=str(skip_mastering).lower(),
+            vocals_gain_db=str(vocals_gain_db),
+            instrumental_gain_db=str(instrumental_gain_db),
+        )
 
     _emit(f"Merging with profile={profile}", 5.0)
     merge_mod = _load_merge_module()
 
     def _karaoke_line(line: str) -> None:
-        _emit(line, 45.0)
+        if stage_log:
+            stage_log.line(line)
+        else:
+            _emit(line, 45.0)
 
     vocals_out, mixed_out = merge_mod.merge_audio(
         vocals,

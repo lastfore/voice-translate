@@ -21,7 +21,24 @@ from pipeline.models import ConvertMode, SliceMode, StageName
 from pipeline.stage_params import merge_stage_params, merge_wizard_params
 from pipeline.store import ProjectStore
 
-from api.services.media_service import split_vocals_paths
+from api.services.media_service import media_url_for, split_vocals_paths
+
+
+def _resolve_merged_mixed_path(merge_artifacts: dict[str, Any], active_slice_mode: str) -> str | None:
+    """Pick mixed.flac from per-mode merge artifacts, with legacy top-level fallback."""
+    if not merge_artifacts:
+        return None
+    mode_art = merge_artifacts.get(active_slice_mode)
+    if isinstance(mode_art, dict) and mode_art.get("mixed"):
+        return str(mode_art["mixed"])
+    top = merge_artifacts.get("mixed")
+    if top:
+        return str(top)
+    for mode in paths.SLICE_MODES:
+        nested = merge_artifacts.get(mode)
+        if isinstance(nested, dict) and nested.get("mixed"):
+            return str(nested["mixed"])
+    return None
 
 
 class PipelineServiceError(Exception):
@@ -175,13 +192,7 @@ def get_project_defaults(store: ProjectStore, project_id: str) -> dict[str, Any]
 
     resolved_sep = store.resolve_stage_inputs(project_id, StageName.SEPARATE)
 
-    has_lrc = bool(project.input_lrc or paths.input_lrc_path(project_id))
-    active_slice_mode = paths.normalize_slice_mode(
-        sl.params.get("mode")
-        or sl.params.get("active_slice_mode")
-        or cv.params.get("active_slice_mode")
-        or (SliceMode.LRC.value if has_lrc else SliceMode.VAD.value)
-    )
+    active_slice_mode = store._active_slice_mode(project)
     resolved_slice = store.resolve_stage_inputs(project_id, StageName.SLICE, {"mode": active_slice_mode})
     resolved_convert = store.resolve_stage_inputs(
         project_id,
@@ -204,6 +215,9 @@ def get_project_defaults(store: ProjectStore, project_id: str) -> dict[str, Any]
         merge_vocals_dir_slice = resolved_merge_slice.get("vocals", "")
 
     stage_status = {name.value: project.stages[name].status.value for name in StageName}
+    merge_slice_mode = paths.normalize_slice_mode(
+        mg.params.get("active_slice_mode") or mg.params.get("slice_mode") or active_slice_mode
+    )
 
     return {
         "display_name": project.display_name,
@@ -234,10 +248,14 @@ def get_project_defaults(store: ProjectStore, project_id: str) -> dict[str, Any]
         },
         "wizard_params": load_wizard_params(store, project_id),
         "artifacts": {
-            "sep_vocals": sep.artifacts.get("vocals"),
-            "sep_instrumental": sep.artifacts.get("instrumental"),
-            "convert_full_track": cv.artifacts.get("full_track"),
-            "convert_dir": cv.artifacts.get("converted_dir"),
-            "mixed": mg.artifacts.get("mixed"),
+            "sep_vocals": media_url_for(sep.artifacts.get("vocals")),
+            "sep_instrumental": media_url_for(sep.artifacts.get("instrumental")),
+            "convert_full_track": media_url_for(cv.artifacts.get("full_track")),
+            "convert_dir": (
+                (cv.artifacts.get(active_slice_mode) or {}).get("converted_dir")
+                if isinstance(cv.artifacts.get(active_slice_mode), dict)
+                else cv.artifacts.get("converted_dir")
+            ),
+            "mixed": media_url_for(_resolve_merged_mixed_path(mg.artifacts, merge_slice_mode)),
         },
     }

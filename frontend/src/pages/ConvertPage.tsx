@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { PathInput } from '@/components/forms/PathInput'
 import { StageParamForm } from '@/components/forms/StageParamForm'
 import { SliceTuner } from '@/components/slices/SliceTuner'
+import { SliceTable } from '@/components/slices/SliceTable'
 import { ArtifactAudio } from '@/components/pipeline/ArtifactAudio'
 import { ModeTabs } from '@/components/pipeline/ModeTabs'
 import { StageLogPanel } from '@/components/pipeline/StageLogPanel'
@@ -15,12 +16,13 @@ import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useProject } from '@/context/ProjectContext'
+import { useConvertedSliceTable } from '@/hooks/useConvertedSliceTable'
 import { projectDefaultsKey, useProjectDefaults } from '@/hooks/useProjectDefaults'
 import { useStageParams } from '@/hooks/useStageParams'
 import { useStageRun } from '@/hooks/useStageRun'
 import { api } from '@/lib/api'
 import { CONVERT_BATCH, CONVERT_FULL, CONVERT_TAB_LABELS } from '@/lib/modes'
-import type { ConvertMode, StageParamValues } from '@/types/pipeline'
+import type { ConvertMode, SliceRow, StageParamValues } from '@/types/pipeline'
 
 type ConvertTab = 'slice_batch' | 'full_track' | 'slice_tuner'
 
@@ -30,9 +32,16 @@ function ConvertPageInner({ projectId, initialMode }: { projectId: string; initi
   const [referenceOverride, setReferenceOverride] = useState('')
   const [referenceFile, setReferenceFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [selectedSlice, setSelectedSlice] = useState<SliceRow | null>(null)
 
   const { data: defaults } = useProjectDefaults(projectId)
+  const activeSliceMode = defaults?.active_slice_mode ?? 'lrc'
   const { data: schema, isLoading: schemaLoading } = useStageParams({ stage: 'convert' })
+  const {
+    data: convertedTable,
+    isLoading: convertedLoading,
+    refetch: refetchConvertedSlices,
+  } = useConvertedSliceTable(projectId, activeSliceMode)
   const stageRun = useStageRun(projectId, 'convert')
   const queryClient = useQueryClient()
 
@@ -40,15 +49,16 @@ function ConvertPageInner({ projectId, initialMode }: { projectId: string; initi
     if (stageRun.status === 'done') {
       toast.success('转换完成')
       queryClient.invalidateQueries({ queryKey: projectDefaultsKey(projectId) })
+      refetchConvertedSlices()
     } else if (stageRun.status === 'failed' || stageRun.status === 'error') {
       toast.error(stageRun.errorMessage ?? '转换运行失败')
     }
-  }, [stageRun.status, stageRun.errorMessage, projectId, queryClient])
+  }, [stageRun.status, stageRun.errorMessage, projectId, queryClient, refetchConvertedSlices])
 
   const mode: ConvertMode = tab === 'full_track' ? 'full_track' : 'slice_batch'
 
   useEffect(() => {
-    const activeSliceMode = defaults?.active_slice_mode ?? 'lrc'
+    if (mode !== CONVERT_FULL) return
     api
       .get<{ url: string | null }>(`/api/projects/${projectId}/artifacts/convert-preview`, {
         mode,
@@ -56,7 +66,14 @@ function ConvertPageInner({ projectId, initialMode }: { projectId: string; initi
       })
       .then((resp) => setPreviewUrl(resp.url))
       .catch(() => setPreviewUrl(null))
-  }, [projectId, mode, defaults?.active_slice_mode, stageRun.status])
+  }, [projectId, mode, activeSliceMode, stageRun.status])
+
+  useEffect(() => {
+    if (mode !== CONVERT_BATCH) return
+    const rows = convertedTable?.rows ?? []
+    const preferred = rows.find((row) => row.audio_url) ?? rows[0] ?? null
+    setSelectedSlice(preferred)
+  }, [convertedTable, mode])
 
   const visibleParams = (schema?.params ?? []).filter((p) => {
     if (mode === CONVERT_FULL && p.slice_batch_only) return false
@@ -71,6 +88,11 @@ function ConvertPageInner({ projectId, initialMode }: { projectId: string; initi
         params.source_vocals = sourceOverride.trim()
       } else {
         params.slices_dir = sourceOverride.trim()
+        const modeMatch = sourceOverride.trim().replace(/\\/g, '/').match(/\/(lrc|vad)\/?$/i)
+        if (modeMatch) {
+          params.slice_mode = modeMatch[1].toLowerCase()
+          params.active_slice_mode = modeMatch[1].toLowerCase()
+        }
       }
     }
 
@@ -79,7 +101,7 @@ function ConvertPageInner({ projectId, initialMode }: { projectId: string; initi
       const form = new FormData()
       form.set('audio', referenceFile)
       try {
-        const resp = await api.post<{ reference: string }>(`/api/projects/${projectId}/reference`, form)
+        const resp = await api.postForm<{ reference: string }>(`/api/projects/${projectId}/reference`, form)
         referencePath = resp.reference
         setReferenceOverride(referencePath)
         setReferenceFile(null)
@@ -92,8 +114,13 @@ function ConvertPageInner({ projectId, initialMode }: { projectId: string; initi
       params.reference = referencePath
     }
 
-    params.active_slice_mode = defaults?.active_slice_mode ?? 'lrc'
-    params.slice_mode = defaults?.active_slice_mode ?? 'lrc'
+    const inferredFromSource =
+      mode === CONVERT_BATCH && sourceOverride.trim()
+        ? sourceOverride.trim().replace(/\\/g, '/').match(/\/(lrc|vad)\/?$/i)?.[1]?.toLowerCase()
+        : null
+    const sliceMode = inferredFromSource ?? defaults?.active_slice_mode ?? 'lrc'
+    params.active_slice_mode = sliceMode
+    params.slice_mode = sliceMode
     stageRun.run(params)
   }
 
@@ -186,7 +213,30 @@ function ConvertPageInner({ projectId, initialMode }: { projectId: string; initi
             <CardTitle>产物预览</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <ArtifactAudio label={mode === CONVERT_FULL ? '整轨转换' : '切片预览'} src={previewUrl} />
+            {mode === CONVERT_FULL ? (
+              <ArtifactAudio label="整轨转换" src={previewUrl} />
+            ) : (
+              <>
+                <p
+                  className="truncate rounded bg-muted px-2 py-1 text-xs text-muted-foreground"
+                  data-testid="convert-output-dir"
+                >
+                  {convertedTable?.dir_path
+                    ? `转换目录：${convertedTable.dir_path}（已转换 ${convertedTable.converted_count}/${convertedTable.total_count}）`
+                    : '尚无转换产物目录'}
+                </p>
+                {convertedLoading ? (
+                  <Skeleton className="h-48 w-full" />
+                ) : (
+                  <SliceTable
+                    rows={convertedTable?.rows ?? []}
+                    selectedId={selectedSlice?.id ?? null}
+                    onSelectRow={setSelectedSlice}
+                  />
+                )}
+                <ArtifactAudio label="选中切片预览" src={selectedSlice?.audio_url} />
+              </>
+            )}
           </CardContent>
         </Card>
       </div>

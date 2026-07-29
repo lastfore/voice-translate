@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 from collections.abc import Callable, Generator, Iterator
 from pathlib import Path
 from typing import Any
@@ -23,12 +24,35 @@ from pipeline.models import (
     utc_now_iso,
 )
 from pipeline.queue import GpuJobQueue, JobResult
+from pipeline.stage_log import (
+    StageLogWriter,
+    build_param_groups,
+    pick_inputs,
+    pick_outputs,
+)
 from pipeline.stage_params import params_for_stage
 from pipeline.stages.convert import run_convert
 from pipeline.stages.merge import run_merge
 from pipeline.stages.separate import run_separate
 from pipeline.stages.slice import run_slice
 from pipeline.store import ProjectStore
+
+# Resolved path/mode fields must not be overwritten by stale UI form params.
+_RESOLVED_INPUT_KEYS = frozenset({
+    "mix_audio",
+    "vocals",
+    "lrc",
+    "slices_dir",
+    "manifest",
+    "output_dir",
+    "output_path",
+    "reference",
+    "source_vocals",
+    "instrumental",
+    "original_vocals",
+    "slice_mode",
+    "active_slice_mode",
+})
 
 
 class StageRunner:
@@ -66,6 +90,8 @@ class StageRunner:
             on_job_id(job_id)
         log_path = paths.project_logs_dir(project_id) / f"{job_id}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
+        created_at = queued_at = utc_now_iso()
+        t_queued = time.monotonic()
 
         self.store.update_stage(project_id, stage, status=StageStatus.RUNNING, error=None)
         self.store.add_job(
@@ -75,7 +101,7 @@ class StageRunner:
                 type="stage",
                 stage=stage,
                 status=JobStatus.QUEUED,
-                created_at=utc_now_iso(),
+                created_at=created_at,
                 log_path=rel_path(log_path, self.store.root),
             ),
         )
@@ -88,14 +114,44 @@ class StageRunner:
                 on_progress(event)
             self._publish_progress(job_id, event)
 
+        stage_log = StageLogWriter(
+            project_id=project_id,
+            stage=stage,
+            job_id=job_id,
+            log_path=log_path,
+            root=self.store.root,
+            on_progress=_log,
+        )
+        stage_log.job_header(queued_at=queued_at, created_at=created_at)
+        stage_log.inputs(pick_inputs(stage, inputs, params, self.store.root))
+        stage_log.params(build_param_groups(stage, params, inputs))
+
         def _work() -> dict[str, Any]:
-            return self._execute_stage(project_id, stage, inputs, params, _log)
+            started_at = utc_now_iso()
+            queue_wait_ms = int((time.monotonic() - t_queued) * 1000)
+            stage_log.job_started(started_at=started_at, queue_wait_ms=queue_wait_ms)
+            t_start = time.monotonic()
+            try:
+                payload = self._execute_stage(project_id, stage, inputs, params, _log, stage_log)
+                out_map, out_extra = pick_outputs(stage, payload.get("artifacts", {}), payload.get("params", {}))
+                stage_log.outputs(out_map, **out_extra)
+                elapsed_ms = int((time.monotonic() - t_start) * 1000)
+                stage_log.job_footer(success=True, elapsed_ms=elapsed_ms)
+                return payload
+            except Exception as exc:
+                elapsed_ms = int((time.monotonic() - t_start) * 1000)
+                stage_log.error(str(exc))
+                stage_log.job_footer(success=False, elapsed_ms=elapsed_ms, error=str(exc))
+                raise
 
         self.queue.enqueue(
-            Job(job_id=job_id, type="stage", stage=stage, status=JobStatus.QUEUED, created_at=utc_now_iso()),
+            Job(job_id=job_id, type="stage", stage=stage, status=JobStatus.QUEUED, created_at=created_at),
             _work,
         )
         job_result = self.queue.wait(job_id)
+        if job_result.status == JobStatus.CANCELLED and not stage_log._footer_written:
+            stage_log.error(job_result.error or "cancelled by user")
+            stage_log.job_footer(success=False, elapsed_ms=0, error=job_result.error or "cancelled")
         return self._finalize_stage(project_id, stage, job_result, inputs, params)
 
     def run_stage_async(
@@ -138,17 +194,20 @@ class StageRunner:
         *,
         stages: list[StageName] | None = None,
         convert_mode: ConvertMode = ConvertMode.SLICE_BATCH,
-        slice_mode: SliceMode = SliceMode.LRC,
+        slice_mode: SliceMode | None = None,
         stop_on_error: bool = True,
         on_progress: Callable[[ProgressEvent], None] | None = None,
         **params: Any,
     ) -> PipelineResult:
         chain = stages or list(StageName)
+        resolved_slice_mode = SliceMode(
+            self.store.resolve_pipeline_slice_mode(project_id, slice_mode)
+        )
         ok, plan_or_errors = self.store.validate_pipeline_chain(
             project_id,
             chain,
             convert_mode=convert_mode,
-            slice_mode=slice_mode,
+            slice_mode=resolved_slice_mode,
             **params,
         )
         if not ok:
@@ -161,10 +220,17 @@ class StageRunner:
 
         for stage in chain:
             stage_params = dict(pipeline_params)
+            sm = resolved_slice_mode.value
             if stage == StageName.SLICE:
-                stage_params.setdefault("mode", slice_mode.value)
+                stage_params.setdefault("mode", sm)
             if stage == StageName.CONVERT:
                 stage_params.setdefault("mode", convert_mode.value)
+                if convert_mode != ConvertMode.FULL_TRACK:
+                    stage_params.setdefault("slice_mode", sm)
+                    stage_params.setdefault("active_slice_mode", sm)
+            if stage == StageName.MERGE:
+                stage_params.setdefault("slice_mode", sm)
+                stage_params.setdefault("active_slice_mode", sm)
 
             result = self.run_stage(project_id, stage, stage_params, on_progress=on_progress)
             results.append(result)
@@ -198,6 +264,7 @@ class StageRunner:
         inputs: dict[str, Any],
         params: dict[str, Any],
         on_progress: Callable[[ProgressEvent], None],
+        stage_log: StageLogWriter | None = None,
     ) -> dict[str, Any]:
         root = self.store.root
 
@@ -216,6 +283,7 @@ class StageRunner:
                 mix,
                 model=params.get("model", "mel_band_roformer_kim_ft_unwa.ckpt"),
                 on_progress=on_progress,
+                stage_log=stage_log,
             )
             return {
                 "artifacts": {
@@ -230,6 +298,12 @@ class StageRunner:
             mode = params.get("mode") or inputs.get("mode", SliceMode.VAD.value)
             slice_mode = paths.normalize_slice_mode(mode)
             out_dir = _abs("output_dir") or paths.slices_mode_dir(project_id, slice_mode)
+            if out_dir:
+                out_mode = paths.infer_slice_mode_from_slices_dir(out_dir, project_id)
+                if out_mode and out_mode != slice_mode:
+                    out_dir = paths.slices_mode_dir(project_id, slice_mode)
+            else:
+                out_dir = paths.slices_mode_dir(project_id, slice_mode)
             assert vocals is not None
             result = run_slice(
                 project_id,
@@ -242,6 +316,7 @@ class StageRunner:
                 min_silence_ms=int(params.get("min_silence_ms", 500)),
                 speech_pad_ms=int(params.get("speech_pad_ms", 80)),
                 on_progress=on_progress,
+                stage_log=stage_log,
             )
             mode_art = {
                 "slices_dir": rel_path(result.slices_dir, root),
@@ -301,6 +376,7 @@ class StageRunner:
                 slice_ids=slice_ids,
                 overrides_path=_abs("overrides_path"),
                 on_progress=on_progress,
+                stage_log=stage_log,
             )
             artifacts: dict[str, Any] = {}
             if mode == ConvertMode.SLICE_BATCH.value:
@@ -353,6 +429,7 @@ class StageRunner:
                 ),
                 skip_mastering=bool(params.get("skip_mastering", False)),
                 on_progress=on_progress,
+                stage_log=stage_log,
             )
             return {
                 "artifacts": {
@@ -403,7 +480,10 @@ class StageRunner:
             return StageResult(project_id, stage, False, error=error)
 
         artifacts = payload.get("artifacts", {})
-        stage_params = {**inputs, **payload.get("params", {}), **params}
+        stage_params = {**params, **payload.get("params", {})}
+        for key in _RESOLVED_INPUT_KEYS:
+            if key in inputs:
+                stage_params[key] = inputs[key]
         self.store.update_stage(
             project_id,
             stage,

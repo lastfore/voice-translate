@@ -122,7 +122,7 @@ def test_stage_runner_cancel_marks_stage_result_failed_with_cancelled_error(
     assert "cancel" in (result.error or "").lower()
 
 
-def _fake_separate_real_subprocess(project_id, mix_audio, *, model, on_progress=None, on_log_line=None):
+def _fake_separate_real_subprocess(project_id, mix_audio, *, model, on_progress=None, on_log_line=None, stage_log=None, **kwargs):
     for _ in venv_runner.iter_subprocess_lines(_SLEEP_30S):
         pass
     return SeparateResult(vocals=Path("v"), instrumental=Path("i"))

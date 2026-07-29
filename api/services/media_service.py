@@ -119,13 +119,25 @@ def resolve_convert_preview_audio(
     if convert_mode == "full_track":
         full_p = paths.resolve_converted_full_track(project_id)
         return media_url_for(str(full_p) if full_p else None)
+    from api.services.slice_service import load_converted_slice_table
+
+    table = load_converted_slice_table(project_id, slice_mode)
+    if table["first_audio_url"]:
+        return table["first_audio_url"]
+    for alt in paths.SLICE_MODES:
+        if alt == paths.normalize_slice_mode(slice_mode):
+            continue
+        alt_table = load_converted_slice_table(project_id, alt)
+        if alt_table["first_audio_url"]:
+            return alt_table["first_audio_url"]
     mode_dir = paths.resolve_converted_mode_dir(project_id, slice_mode) or paths.resolve_converted_slices_dir(
         project_id, slice_mode
     )
-    if mode_dir is None:
-        return None
-    previews = first_audio_in_dir(str(mode_dir), limit=1)
-    return media_url_for(previews[0] if previews else None)
+    if mode_dir is not None:
+        previews = first_audio_in_dir(str(mode_dir), limit=1)
+        if previews:
+            return media_url_for(previews[0])
+    return None
 
 
 def save_upload(upload_path: str | Path, dest: Path) -> Path | None:
