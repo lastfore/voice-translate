@@ -63,7 +63,7 @@ def test_local_cpu_mock_refines_fallback(phoneme_mod, monkeypatch) -> None:
     audio = np.zeros(44100, dtype=np.float32)
 
     def fake_align(_audio, _sr, _text, _start, _end):
-        return 14920.0
+        return 14920.0, ""
 
     monkeypatch.setattr(phoneme_mod, "align_boundary_local", fake_align)
     result = phoneme_mod.refine_boundary(
@@ -94,3 +94,10 @@ def test_local_cpu_skips_non_fallback_when_fallback_only(phoneme_mod) -> None:
     )
     assert result.skipped
     assert result.reason == "not_fallback_boundary"
+
+
+def test_align_boundary_local_empty_text_returns_reason(phoneme_mod) -> None:
+    audio = np.zeros(4410, dtype=np.float32)
+    onset, reason = phoneme_mod.align_boundary_local(audio, 44100, "  ", 0.0, 500.0)
+    assert onset is None
+    assert reason == "phoneme_align_empty_text"

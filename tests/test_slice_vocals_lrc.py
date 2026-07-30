@@ -727,6 +727,41 @@ def test_remote_phoneme_align_skipped_in_manifest(tmp_path: Path, lrc_mod) -> No
 
     assert manifest["phoneme_align_mode"] == "remote"
     assert manifest["phoneme_align_skipped_remote_count"] >= 1
+    assert manifest["phoneme_align_skip_counts"]["remote_not_implemented"] >= 1
+
+
+def test_phoneme_fallback_only_skip_counts_in_manifest(tmp_path: Path, lrc_mod, monkeypatch) -> None:
+    lrc_path = tmp_path / "song.lrc"
+    vocals_path = tmp_path / "vocals.wav"
+    out_dir = tmp_path / "slices"
+
+    _write_lrc(
+        lrc_path,
+        [
+            ("00:10.00", "line one"),
+            ("00:15.00", "line two"),
+        ],
+    )
+    _write_wav(vocals_path, np.zeros(int(44100 * 20), dtype=np.float32))
+
+    def fake_refine_boundary(**_kwargs):
+        from phoneme_align import PhonemeAlignResult
+
+        return PhonemeAlignResult(skipped=True, reason="not_fallback_boundary")
+
+    monkeypatch.setattr(lrc_mod, "refine_boundary", fake_refine_boundary)
+
+    _, _, manifest = lrc_mod.slice_vocals_lrc(
+        lrc_path,
+        vocals_path,
+        out_dir,
+        phoneme_align_mode="local_cpu",
+        phoneme_align_fallback_only=True,
+    )
+
+    assert manifest["phoneme_align_applied_count"] == 0
+    assert manifest["phoneme_align_skip_counts"]["not_fallback_boundary"] == 1
+    assert manifest["boundary_diagnostics"][0]["phoneme_align_skip_reason"] == "not_fallback_boundary"
 
 
 @pytest.mark.integration

@@ -5,5 +5,11 @@ anyio
 httpx
 pytest
 pytest-asyncio
-# P2 optional: local CPU phoneme alignment (downloads MMS model on first use)
-ctc-forced-aligner>=1.0.2
+# P2 phoneme_align_mode=local_cpu — CTC forced aligner (zho, char-level).
+# MahmoudAshraf97 fork (PyPI deskpai 1.0.x uses a different ONNX API).
+# MMS model: MahmoudAshraf/mms-300m-1130-forced-aligner (~300MB, first run).
+# Cache: separator-env/models/hf-cache (HF_HOME, set in phoneme_align.py + API bat).
+# HF_ENDPOINT: only needed when cache miss; use https://huggingface.co or hf-mirror.com.
+# SOCKS proxy envs need: httpx[socks]
+ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git
+httpx[socks]

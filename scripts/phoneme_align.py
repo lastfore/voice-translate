@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 
 import numpy as np
 
-SCRIPT_DIR = __import__("pathlib").Path(__file__).resolve().parent
+SCRIPT_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = SCRIPT_DIR.parent
+# Same layout as scripts/slice-vocals.bat and pipeline/venv_runner.separator_env().
+_HF_HOME = _REPO_ROOT / "separator-env" / "models" / "hf-cache"
+_HF_HOME.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("HF_HOME", str(_HF_HOME))
 
 _ALIGNMENT_MODEL = None
 _ALIGNMENT_TOKENIZER = None
@@ -48,26 +55,39 @@ def _load_alignment_model():
     return model, tokenizer
 
 
+def _resample_to_16k(audio: np.ndarray, sr: int) -> np.ndarray:
+    if sr == 16000:
+        return audio.astype(np.float32, copy=False)
+    import torch
+    import torchaudio.functional as F
+
+    wav = torch.from_numpy(audio.astype(np.float32, copy=False))
+    out = F.resample(wav, sr, 16000)
+    return out.numpy()
+
+
 def align_boundary_local(
     audio: np.ndarray,
     sr: int,
     text: str,
     window_start_ms: float,
     window_end_ms: float,
-) -> float | None:
-    """Return absolute onset ms for first aligned character, or None on failure."""
+) -> tuple[float | None, str]:
+    """Return (absolute onset ms, skip reason). skip reason is empty on success."""
     text = text.strip()
     if not text:
-        return None
+        return None, "phoneme_align_empty_text"
 
     start_sample = _ms_to_sample(window_start_ms, sr)
     end_sample = min(_ms_to_sample(window_end_ms, sr), len(audio))
     if end_sample <= start_sample:
-        return None
+        return None, "phoneme_align_invalid_window"
 
     segment = audio[start_sample:end_sample].astype(np.float32, copy=False)
     if segment.size == 0:
-        return None
+        return None, "phoneme_align_invalid_window"
+
+    segment = _resample_to_16k(segment, sr)
 
     try:
         import torch
@@ -79,11 +99,11 @@ def align_boundary_local(
             preprocess_text,
         )
     except ImportError:
-        return None
+        return None, "phoneme_align_import_error"
 
     try:
         model, tokenizer = _load_alignment_model()
-        wav = torch.from_numpy(segment).unsqueeze(0)
+        wav = torch.from_numpy(segment)
         emissions, stride = generate_emissions(model, wav, batch_size=1)
         tokens_starred, text_starred = preprocess_text(
             text,
@@ -95,15 +115,15 @@ def align_boundary_local(
         spans = get_spans(tokens_starred, segments, blank_token)
         word_ts = postprocess_results(text_starred, spans, stride, scores)
     except Exception:
-        return None
+        return None, "phoneme_align_failed"
 
     if not word_ts:
-        return None
+        return None, "phoneme_align_no_timestamps"
 
     first = word_ts[0]
     start_s = float(getattr(first, "start", first.get("start", 0) if isinstance(first, dict) else 0))
     onset_ms = window_start_ms + start_s * 1000.0
-    return onset_ms
+    return onset_ms, ""
 
 
 def refine_boundary(
@@ -141,7 +161,7 @@ def refine_boundary(
     if fallback_only and not fallback:
         return PhonemeAlignResult(skipped=True, reason="not_fallback_boundary")
 
-    onset_ms = align_boundary_local(
+    onset_ms, align_skip_reason = align_boundary_local(
         audio,
         sr,
         next_line_text,
@@ -149,7 +169,10 @@ def refine_boundary(
         window_end_ms,
     )
     if onset_ms is None:
-        return PhonemeAlignResult(skipped=True, reason="phoneme_align_error")
+        return PhonemeAlignResult(
+            skipped=True,
+            reason=align_skip_reason or "phoneme_align_error",
+        )
 
     return PhonemeAlignResult(
         onset_ms=onset_ms,

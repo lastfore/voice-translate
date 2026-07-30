@@ -8,12 +8,14 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pipeline import paths
 from pipeline.models import ProgressEvent, SliceMode, StageName, rel_path
 from pipeline.slice_overrides import load as load_overrides
-from pipeline.slice_overrides import merge_after_reslice, save as save_overrides
+from pipeline.slice_overrides import merge_after_reslice
+from pipeline.slice_overrides import save as save_overrides
+from pipeline.venv_runner import run_subprocess, separator_env, separator_python
 
 if TYPE_CHECKING:
     from pipeline.stage_log import StageLogWriter
@@ -38,6 +40,159 @@ def _load_script_module(name: str, filename: str):
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _phoneme_align_needs_subprocess(phoneme_align_mode: str) -> bool:
+    """Torch MMS in uvicorn worker thread can crash on Windows; isolate in subprocess."""
+    return phoneme_align_mode == "local_cpu"
+
+
+def _log_lrc_boundaries(
+    stage_log: StageLogWriter,
+    meta: dict[str, Any],
+    *,
+    boundary_mode: str,
+    search_margin_ms: int,
+    onset_min_lead_silence_ms: int,
+    min_slice_ms: int,
+    onset_energy_threshold_db: float,
+    safety_margin_ms: int,
+    g2p_preroll_ms: int,
+    boundary_zcr_weight: float,
+    phoneme_align_mode: str,
+    phoneme_align_fallback_only: bool,
+) -> None:
+    aligned = meta.get("aligned_boundary_count", 0)
+    valley = meta.get("valley_boundary_count", 0)
+    fallback = meta.get("fallback_boundary_count", 0)
+    phoneme_applied = meta.get("phoneme_align_applied_count", 0)
+    phoneme_remote_skipped = meta.get("phoneme_align_skipped_remote_count", 0)
+    phoneme_skip_counts = meta.get("phoneme_align_skip_counts") or {}
+    skip_summary = " ".join(
+        f"{reason}={count}" for reason, count in sorted(phoneme_skip_counts.items())
+    )
+    stage_log.info(
+        "LRC boundaries "
+        f"mode={meta.get('boundary_mode', boundary_mode)} "
+        f"aligned={aligned} valley={valley} fallback={fallback} "
+        f"search_margin_ms={meta.get('search_margin_ms', search_margin_ms)} "
+        f"onset_min_lead_silence_ms={meta.get('onset_min_lead_silence_ms', onset_min_lead_silence_ms)} "
+        f"min_slice_ms={meta.get('min_slice_ms', min_slice_ms)} "
+        f"onset_energy_threshold_db={meta.get('onset_energy_threshold_db', onset_energy_threshold_db)} "
+        f"safety_margin_ms={meta.get('safety_margin_ms', safety_margin_ms)} "
+        f"g2p_preroll_ms={meta.get('g2p_preroll_ms', g2p_preroll_ms)} "
+        f"boundary_zcr_weight={meta.get('boundary_zcr_weight', boundary_zcr_weight)} "
+        f"phoneme_align_mode={meta.get('phoneme_align_mode', phoneme_align_mode)} "
+        f"phoneme_align_fallback_only={str(meta.get('phoneme_align_fallback_only', phoneme_align_fallback_only)).lower()} "
+        f"phoneme_align_applied={phoneme_applied}"
+        + (f" phoneme_align_skip={skip_summary}" if skip_summary else "")
+    )
+    if phoneme_remote_skipped:
+        stage_log.info(
+            f"WARN phoneme_align_mode=remote skipped {phoneme_remote_skipped} boundaries "
+            "(remote_not_implemented)"
+        )
+    for item in meta.get("boundary_diagnostics", []):
+        status = "aligned" if item.get("aligned") else "fallback"
+        delta = item.get("delta_ms", 0)
+        delta_text = f" delta={delta:.2f}ms" if float(delta) > 0.01 else ""
+        margin_applied = int(item.get("safety_margin_applied_ms", 0))
+        margin_text = f" margin={margin_applied}ms" if margin_applied > 0 else ""
+        g2p_used = float(item.get("g2p_preroll_ms_used", 0))
+        g2p_text = f" g2p={g2p_used:.0f}ms" if g2p_used > 0 else ""
+        phoneme_text = " phoneme=1" if item.get("phoneme_align_applied") else ""
+        phoneme_skip = item.get("phoneme_align_skip_reason") or ""
+        phoneme_skip_text = f" phoneme_skip={phoneme_skip}" if phoneme_skip else ""
+        stage_log.info(
+            f"[BOUNDARY] i={int(item['boundary_index']):02d} {item['next_slice_id']} "
+            f"{status} method={item['method']} reason={item['reason']} "
+            f"t_cut={item['t_cut_ms']} lrc={item['next_lrc_ms']}{delta_text}{margin_text}{g2p_text}"
+            f"{phoneme_skip_text}{phoneme_text}"
+        )
+    example = meta.get("first_fallback_example")
+    if example:
+        stage_log.info(f"LRC first fallback example: {example}")
+
+
+def _run_lrc_slice_subprocess(
+    *,
+    root: Path,
+    project_id: str,
+    lrc_path: Path,
+    vocals: Path,
+    output_dir: Path,
+    boundary_mode: str,
+    search_margin_ms: int,
+    onset_min_lead_silence_ms: int,
+    min_slice_ms: int,
+    onset_energy_threshold_db: float,
+    safety_margin_ms: int,
+    g2p_preroll_ms: int,
+    boundary_zcr_weight: float,
+    phoneme_align_mode: str,
+    phoneme_align_fallback_only: bool,
+    phoneme_align_remote_url: str,
+    phoneme_align_remote_timeout_s: int,
+    stage_log: StageLogWriter | None = None,
+) -> tuple[list[Path], Path, dict[str, Any]]:
+    script = root / "scripts" / "slice-vocals-lrc.py"
+    cmd: list[str | Path] = [
+        separator_python(),
+        script,
+        lrc_path,
+        vocals,
+        "-o",
+        output_dir,
+        "--song-name",
+        project_id,
+        "--boundary-mode",
+        boundary_mode,
+        "--search-margin-ms",
+        str(search_margin_ms),
+        "--onset-min-lead-silence-ms",
+        str(onset_min_lead_silence_ms),
+        "--min-slice-ms",
+        str(min_slice_ms),
+        "--onset-energy-threshold-db",
+        str(onset_energy_threshold_db),
+        "--safety-margin-ms",
+        str(safety_margin_ms),
+        "--g2p-preroll-ms",
+        str(g2p_preroll_ms),
+        "--boundary-zcr-weight",
+        str(boundary_zcr_weight),
+        "--phoneme-align-mode",
+        phoneme_align_mode,
+        "--phoneme-align-fallback-only" if phoneme_align_fallback_only else "--no-phoneme-align-fallback-only",
+        "--phoneme-align-remote-timeout-s",
+        str(phoneme_align_remote_timeout_s),
+    ]
+    if phoneme_align_remote_url:
+        cmd.extend(["--phoneme-align-remote-url", phoneme_align_remote_url])
+
+    def _on_line(line: str) -> None:
+        if stage_log and line.strip():
+            stage_log.info(line)
+
+    result = run_subprocess(
+        cmd,
+        cwd=root,
+        env=separator_env(),
+        on_line=_on_line if stage_log else None,
+    )
+    if result.returncode != 0:
+        detail = ((result.stdout or "") + (result.stderr or "")).strip()
+        raise RuntimeError(detail or f"slice-vocals-lrc.py exited with code {result.returncode}")
+
+    manifest_path = output_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise RuntimeError(f"slice subprocess did not write manifest: {manifest_path}")
+
+    meta = json.loads(manifest_path.read_text(encoding="utf-8"))
+    written = sorted(output_dir.glob("*.flac"))
+    if not written:
+        raise RuntimeError("No slices were produced")
+    return written, manifest_path, meta
 
 
 def run_slice(
@@ -135,67 +290,59 @@ def run_slice(
         if lrc_path is None:
             raise ValueError("LRC mode requires lrc_path")
         lrc_path = Path(lrc_path).resolve()
-        mod = _load_script_module("slice_vocals_lrc", "slice-vocals-lrc.py")
-        written, manifest_path, meta = mod.slice_vocals_lrc(
-            lrc_path,
-            vocals,
-            output_dir,
-            song_name=project_id,
-            boundary_mode=boundary_mode,
-            search_margin_ms=search_margin_ms,
-            onset_min_lead_silence_ms=onset_min_lead_silence_ms,
-            min_slice_ms=min_slice_ms,
-            onset_energy_threshold_db=onset_energy_threshold_db,
-            safety_margin_ms=safety_margin_ms,
-            g2p_preroll_ms=g2p_preroll_ms,
-            boundary_zcr_weight=boundary_zcr_weight,
-            phoneme_align_mode=phoneme_align_mode,
-            phoneme_align_fallback_only=phoneme_align_fallback_only,
-            phoneme_align_remote_url=phoneme_align_remote_url,
-            phoneme_align_remote_timeout_s=phoneme_align_remote_timeout_s,
-        )
-        if stage_log and isinstance(meta, dict):
-            aligned = meta.get("aligned_boundary_count", 0)
-            valley = meta.get("valley_boundary_count", 0)
-            fallback = meta.get("fallback_boundary_count", 0)
-            phoneme_applied = meta.get("phoneme_align_applied_count", 0)
-            phoneme_remote_skipped = meta.get("phoneme_align_skipped_remote_count", 0)
-            stage_log.info(
-                "LRC boundaries "
-                f"mode={meta.get('boundary_mode', boundary_mode)} "
-                f"aligned={aligned} valley={valley} fallback={fallback} "
-                f"search_margin_ms={meta.get('search_margin_ms', search_margin_ms)} "
-                f"onset_min_lead_silence_ms={meta.get('onset_min_lead_silence_ms', onset_min_lead_silence_ms)} "
-                f"min_slice_ms={meta.get('min_slice_ms', min_slice_ms)} "
-                f"onset_energy_threshold_db={meta.get('onset_energy_threshold_db', onset_energy_threshold_db)} "
-                f"safety_margin_ms={meta.get('safety_margin_ms', safety_margin_ms)} "
-                f"g2p_preroll_ms={meta.get('g2p_preroll_ms', g2p_preroll_ms)} "
-                f"boundary_zcr_weight={meta.get('boundary_zcr_weight', boundary_zcr_weight)} "
-                f"phoneme_align_mode={meta.get('phoneme_align_mode', phoneme_align_mode)} "
-                f"phoneme_align_applied={phoneme_applied}"
+        lrc_kwargs = {
+            "boundary_mode": boundary_mode,
+            "search_margin_ms": search_margin_ms,
+            "onset_min_lead_silence_ms": onset_min_lead_silence_ms,
+            "min_slice_ms": min_slice_ms,
+            "onset_energy_threshold_db": onset_energy_threshold_db,
+            "safety_margin_ms": safety_margin_ms,
+            "g2p_preroll_ms": g2p_preroll_ms,
+            "boundary_zcr_weight": boundary_zcr_weight,
+            "phoneme_align_mode": phoneme_align_mode,
+            "phoneme_align_fallback_only": phoneme_align_fallback_only,
+            "phoneme_align_remote_url": phoneme_align_remote_url,
+            "phoneme_align_remote_timeout_s": phoneme_align_remote_timeout_s,
+        }
+        if _phoneme_align_needs_subprocess(phoneme_align_mode):
+            if stage_log:
+                stage_log.info(
+                    "phoneme_align_mode=local_cpu: running slice in separator-env subprocess "
+                    "(isolates Torch from API process)"
+                )
+            written, manifest_path, meta = _run_lrc_slice_subprocess(
+                root=root,
+                project_id=project_id,
+                lrc_path=lrc_path,
+                vocals=vocals,
+                output_dir=output_dir,
+                stage_log=stage_log,
+                **lrc_kwargs,
             )
-            if phoneme_remote_skipped:
-                stage_log.info(
-                    f"WARN phoneme_align_mode=remote skipped {phoneme_remote_skipped} boundaries "
-                    "(remote_not_implemented)"
-                )
-            for item in meta.get("boundary_diagnostics", []):
-                status = "aligned" if item.get("aligned") else "fallback"
-                delta = item.get("delta_ms", 0)
-                delta_text = f" delta={delta:.2f}ms" if float(delta) > 0.01 else ""
-                margin_applied = int(item.get("safety_margin_applied_ms", 0))
-                margin_text = f" margin={margin_applied}ms" if margin_applied > 0 else ""
-                g2p_used = float(item.get("g2p_preroll_ms_used", 0))
-                g2p_text = f" g2p={g2p_used:.0f}ms" if g2p_used > 0 else ""
-                phoneme_text = " phoneme=1" if item.get("phoneme_align_applied") else ""
-                stage_log.info(
-                    f"[BOUNDARY] i={int(item['boundary_index']):02d} {item['next_slice_id']} "
-                    f"{status} method={item['method']} reason={item['reason']} "
-                    f"t_cut={item['t_cut_ms']} lrc={item['next_lrc_ms']}{delta_text}{margin_text}{g2p_text}{phoneme_text}"
-                )
-            example = meta.get("first_fallback_example")
-            if example:
-                stage_log.info(f"LRC first fallback example: {example}")
+        else:
+            mod = _load_script_module("slice_vocals_lrc", "slice-vocals-lrc.py")
+            written, manifest_path, meta = mod.slice_vocals_lrc(
+                lrc_path,
+                vocals,
+                output_dir,
+                song_name=project_id,
+                **lrc_kwargs,
+            )
+        if stage_log and isinstance(meta, dict):
+            _log_lrc_boundaries(
+                stage_log,
+                meta,
+                boundary_mode=boundary_mode,
+                search_margin_ms=search_margin_ms,
+                onset_min_lead_silence_ms=onset_min_lead_silence_ms,
+                min_slice_ms=min_slice_ms,
+                onset_energy_threshold_db=onset_energy_threshold_db,
+                safety_margin_ms=safety_margin_ms,
+                g2p_preroll_ms=g2p_preroll_ms,
+                boundary_zcr_weight=boundary_zcr_weight,
+                phoneme_align_mode=phoneme_align_mode,
+                phoneme_align_fallback_only=phoneme_align_fallback_only,
+            )
     else:
         mod = _load_script_module("slice_vocals", "slice-vocals.py")
         written, manifest_path = mod.slice_vocals(

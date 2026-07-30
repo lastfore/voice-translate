@@ -3,7 +3,8 @@
 > **关联文档：** [LRC切片起音对齐方案.md](./LRC切片起音对齐方案.md)、[LRC切片能量谷底与安全边距方案.md](./LRC切片能量谷底与安全边距方案.md)、[音乐歌词音频切分与拼接合并的技术方案调研报告.md](./音乐歌词音频切分与拼接合并的技术方案调研报告.md)、[人声伴奏结合技术调研报告.md](./人声伴奏结合技术调研报告.md)  
 > **版本：** v1.0  
 > **日期：** 2026-07-30  
-> **状态：** 待实施
+> **状态：** 已实施（develop，2026-07-30）  
+> **调研报告同步：** 落地验证摘要见仓库外 `d:\docs\research\AI编程工具调研\音乐歌词音频切分与拼接合并的技术方案调研报告.md` §5；仓库内 `docs/音乐歌词音频切分与拼接合并的技术方案调研报告.md` 需手动对齐。
 
 ---
 
@@ -137,18 +138,17 @@ flowchart LR
 | 鼻音/边音 | 么、呢、来 | `g2p_preroll_ms * 0.6` |
 | 元音/其他 | 爱、我、啊 | `g2p_preroll_ms * 0.3` |
 
-3. 修正搜索左边界：
+3. 修正搜索左边界（**实现语义**：用 G2P 扩展回溯距离，而非把 `next_lrc - pre_roll` 作为 `max()` 第三项——后者在 `search_margin_ms > pre_roll` 时不会扩展窗口）：
 
 ```
-pre_roll = lookup_preroll(next_line_text, g2p_preroll_ms)
-window_start_ms = max(
-    line_start_ms + min_slice_ms,
-    next_lrc_ts - search_margin_ms,
-    next_lrc_ts - pre_roll,   # 仅当 g2p_preroll_ms > 0
-)
+pre_roll = lookup_preroll(next_line_text, g2p_preroll_ms)   # g2p_preroll_ms > 0 时
+lookback_ms = search_margin_ms
+if pre_roll > 0:
+    lookback_ms = max(search_margin_ms, int(pre_roll))
+window_start_ms = max(line_start_ms + min_slice_ms, next_lrc_ts - lookback_ms)
 ```
 
-`g2p_preroll_ms=0` 时跳过步骤 2–3，与现行为一致。
+`g2p_preroll_ms=0` 时跳过步骤 2–3，`lookback_ms = search_margin_ms`，与现行为一致。
 
 **新增模块：** `scripts/lrc_g2p_preroll.py`（纯规则，便于单测）。
 

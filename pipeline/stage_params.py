@@ -269,8 +269,8 @@ STAGE_PARAMS: dict[str, list[StageParam]] = {
             key="phoneme_align_mode",
             label="音素对齐模式",
             description=(
-                "fallback 边界音素级精修。off 关闭；local_cpu 使用 CTC 对齐；"
-                "remote 预留（尚未实现）。"
+                "fallback 边界音素级精修。off 关闭；local_cpu 使用 CTC 对齐（首次运行下载 MMS 模型 ~300MB，"
+                "见 requirements-api.txt）；remote 预留（尚未实现，日志 WARN 不失败）。"
             ),
             param_type="choice",
             default="off",
@@ -425,8 +425,9 @@ STAGE_PARAMS: dict[str, list[StageParam]] = {
             key="boundary_crossfade_ms",
             label="句间交叉淡化 (ms)",
             description=(
-                "slice_stitch 模式下相邻切片接缝的 overlap 交叉淡化时长。"
-                "0 保持现状（仅片内线 fade）；典型试听值 12–20。"
+                "相邻切片接缝 overlap 交叉淡化时长。"
+                "仅当 merge_mode=slice_stitch 且 profile 启用 stitch_slices（如 balanced/full）时生效；"
+                "whole_track 或 quick profile 不 stitch。0 保持现状（仅片内线 fade）；典型试听 12–20。"
             ),
             param_type="int",
             default=0,
@@ -438,7 +439,10 @@ STAGE_PARAMS: dict[str, list[StageParam]] = {
         StageParam(
             key="boundary_crossfade_curve",
             label="交叉淡化曲线",
-            description="句间 overlap 的淡化曲线。equal_power 可保持中点能量；linear 与旧 fade 接近。",
+            description=(
+                "句间 overlap 淡化曲线（需 slice_stitch + stitch_slices）。"
+                "equal_power 保持中点能量；linear 与旧 fade 接近。"
+            ),
             param_type="choice",
             default="equal_power",
             choices=("linear", "equal_power"),
@@ -446,14 +450,17 @@ STAGE_PARAMS: dict[str, list[StageParam]] = {
         StageParam(
             key="boundary_zero_crossing",
             label="零交叉对齐",
-            description="交叉淡化前在 overlap 区寻找零交叉点，减轻 click/pop。",
+            description="交叉淡化前在 overlap 区寻找零交叉点（需 slice_stitch + stitch_slices），减轻 click/pop。",
             param_type="bool",
             default=True,
         ),
         StageParam(
             key="boundary_lufs_match_ms",
             label="边界响度匹配 (ms)",
-            description="0 关闭；>0 在接缝两侧短时窗口做响度匹配（P3，默认关闭）。",
+            description=(
+                "0 关闭；>0 在接缝两侧短时窗口做响度匹配（RMS dB 近似 LUFS，非完整 BS.1770）。"
+                "需 slice_stitch + stitch_slices；在 crossfade 之前应用。"
+            ),
             param_type="int",
             default=0,
             minimum=0,
@@ -463,7 +470,10 @@ STAGE_PARAMS: dict[str, list[StageParam]] = {
         StageParam(
             key="splice_wsola_search_ms",
             label="WSOLA 相位搜索 (ms)",
-            description="0 关闭；legato 边界 NCC 相位微调半径（P3，默认关闭）。",
+            description=(
+                "0 关闭；仅 legato_onset 边界做 NCC 相位微调（与 profile time_align 独立）。"
+                "需 slice_stitch + stitch_slices。"
+            ),
             param_type="int",
             default=0,
             minimum=0,

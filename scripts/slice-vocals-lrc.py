@@ -90,6 +90,7 @@ class BoundaryDiagnostic:
     safety_margin_applied_ms: int = 0
     g2p_preroll_ms_used: float = 0.0
     phoneme_align_applied: bool = False
+    phoneme_align_skip_reason: str = ""
 
 
 def apply_fade(audio: np.ndarray, sr: int, fade_in_ms: int, fade_out_ms: int) -> np.ndarray:
@@ -550,7 +551,7 @@ def compute_boundaries(
     sr: int,
     duration_ms: float,
     params: BoundaryParams,
-) -> tuple[list[float], list[bool], list[BoundaryDiagnostic], int, int]:
+) -> tuple[list[float], list[bool], list[BoundaryDiagnostic], int, int, dict[str, int]]:
     """Return aligned start_ms per slice, entry-boundary fallback flags, and diagnostics."""
     n = len(lyrics)
     starts = [lyrics[0].start_ms]
@@ -558,6 +559,7 @@ def compute_boundaries(
     diagnostics: list[BoundaryDiagnostic] = []
     phoneme_applied_count = 0
     phoneme_skipped_remote_count = 0
+    phoneme_skip_counts: dict[str, int] = {}
 
     for i in range(n - 1):
         next_lrc = lyrics[i + 1].start_ms
@@ -589,6 +591,7 @@ def compute_boundaries(
             )
 
         phoneme_applied = False
+        phoneme_skip_reason = ""
         if params.phoneme_align_mode != PhonemeAlignMode.OFF.value:
             align_window_start = max(
                 starts[i] + params.min_slice_ms,
@@ -613,6 +616,11 @@ def compute_boundaries(
                 remote_url=params.phoneme_align_remote_url,
                 remote_timeout_s=params.phoneme_align_remote_timeout_s,
             )
+            if align_result.skipped and align_result.reason:
+                phoneme_skip_reason = align_result.reason
+                phoneme_skip_counts[align_result.reason] = (
+                    phoneme_skip_counts.get(align_result.reason, 0) + 1
+                )
             if align_result.reason == "remote_not_implemented":
                 phoneme_skipped_remote_count += 1
             if align_result.onset_ms is not None:
@@ -645,10 +653,11 @@ def compute_boundaries(
                 safety_margin_applied_ms=result.safety_margin_applied_ms,
                 g2p_preroll_ms_used=round(g2p_used, 2),
                 phoneme_align_applied=phoneme_applied,
+                phoneme_align_skip_reason=phoneme_skip_reason,
             )
         )
 
-    return starts, fallbacks, diagnostics, phoneme_applied_count, phoneme_skipped_remote_count
+    return starts, fallbacks, diagnostics, phoneme_applied_count, phoneme_skipped_remote_count, phoneme_skip_counts
 
 
 def format_boundary_diagnostic_line(item: BoundaryDiagnostic) -> str:
@@ -659,10 +668,17 @@ def format_boundary_diagnostic_line(item: BoundaryDiagnostic) -> str:
         if item.safety_margin_applied_ms > 0
         else ""
     )
+    phoneme_skip = (
+        f" phoneme_skip={item.phoneme_align_skip_reason}"
+        if item.phoneme_align_skip_reason
+        else ""
+    )
+    phoneme_applied = " phoneme=1" if item.phoneme_align_applied else ""
     return (
         f"[BOUNDARY] i={item.boundary_index:02d} {item.next_slice_id} "
         f"{status} method={item.method} reason={item.reason} "
         f"t_cut={item.t_cut_ms:.2f} lrc={item.next_lrc_ms:.2f}{delta}{margin}"
+        f"{phoneme_skip}{phoneme_applied}"
     )
 
 
@@ -714,7 +730,7 @@ def slice_vocals_lrc(
         phoneme_align_remote_timeout_s=phoneme_align_remote_timeout_s,
     )
 
-    starts, fallbacks, diagnostics, phoneme_applied_count, phoneme_skipped_remote_count = (
+    starts, fallbacks, diagnostics, phoneme_applied_count, phoneme_skipped_remote_count, phoneme_skip_counts = (
         compute_boundaries(lyrics, audio, sr, duration_ms, params)
     )
 
@@ -815,6 +831,7 @@ def slice_vocals_lrc(
         "phoneme_align_remote_url": phoneme_align_remote_url,
         "phoneme_align_applied_count": phoneme_applied_count,
         "phoneme_align_skipped_remote_count": phoneme_skipped_remote_count,
+        "phoneme_align_skip_counts": phoneme_skip_counts,
         "sample_rate": sr,
         "fade_in_ms": FADE_IN_MS,
         "fade_out_ms": FADE_OUT_MS,
@@ -834,6 +851,7 @@ def slice_vocals_lrc(
                 "safety_margin_applied_ms": item.safety_margin_applied_ms,
                 "g2p_preroll_ms_used": item.g2p_preroll_ms_used,
                 "phoneme_align_applied": item.phoneme_align_applied,
+                "phoneme_align_skip_reason": item.phoneme_align_skip_reason,
             }
             for item in diagnostics
         ],
@@ -895,6 +913,42 @@ def main() -> int:
         default=DEFAULT_SAFETY_MARGIN_MS,
         help="Fallback margin before next LRC timestamp in ms (default: 80)",
     )
+    parser.add_argument(
+        "--g2p-preroll-ms",
+        type=int,
+        default=0,
+        help="G2P-based preroll before boundary search (default: 0)",
+    )
+    parser.add_argument(
+        "--boundary-zcr-weight",
+        type=float,
+        default=0.0,
+        help="Weight for zero-crossing rate in boundary scoring (default: 0)",
+    )
+    parser.add_argument(
+        "--phoneme-align-mode",
+        choices=tuple(m.value for m in PhonemeAlignMode),
+        default=PhonemeAlignMode.OFF.value,
+        help="Phoneme boundary refinement mode (default: off)",
+    )
+    parser.add_argument(
+        "--phoneme-align-fallback-only",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Only refine fallback boundaries with phoneme align (default: true)",
+    )
+    parser.add_argument(
+        "--phoneme-align-remote-url",
+        type=str,
+        default="",
+        help="Remote phoneme align service URL (phoneme_align_mode=remote)",
+    )
+    parser.add_argument(
+        "--phoneme-align-remote-timeout-s",
+        type=int,
+        default=30,
+        help="Remote phoneme align timeout in seconds (default: 30)",
+    )
     args = parser.parse_args()
 
     song_name = args.song_name or args.lrc.stem
@@ -912,6 +966,12 @@ def main() -> int:
             min_slice_ms=args.min_slice_ms,
             onset_energy_threshold_db=args.onset_energy_threshold_db,
             safety_margin_ms=args.safety_margin_ms,
+            g2p_preroll_ms=args.g2p_preroll_ms,
+            boundary_zcr_weight=args.boundary_zcr_weight,
+            phoneme_align_mode=args.phoneme_align_mode,
+            phoneme_align_fallback_only=args.phoneme_align_fallback_only,
+            phoneme_align_remote_url=args.phoneme_align_remote_url,
+            phoneme_align_remote_timeout_s=args.phoneme_align_remote_timeout_s,
         )
     except Exception as exc:  # noqa: BLE001 - CLI entrypoint
         print(f"Error: {exc}", file=sys.stderr)

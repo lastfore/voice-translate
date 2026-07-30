@@ -14,6 +14,10 @@ set ROOT=%CD%
 
 call "%ROOT%\separator-env\Scripts\activate.bat"
 
+set HF_HOME=%ROOT%\separator-env\models\hf-cache
+if not exist "%HF_HOME%" mkdir "%HF_HOME%"
+if not defined HF_ENDPOINT set HF_ENDPOINT=https://huggingface.co
+
 echo Checking FastAPI/uvicorn...
 python -c "import fastapi, uvicorn, anyio" 2>nul
 if errorlevel 1 (
