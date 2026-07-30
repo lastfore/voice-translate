@@ -226,6 +226,84 @@ STAGE_PARAMS: dict[str, list[StageParam]] = {
             step=1.0,
             lrc_only=True,
         ),
+        StageParam(
+            key="safety_margin_ms",
+            label="回退安全边距 (ms)",
+            description=(
+                "起音/谷底检测均失败回退时，从下一行 LRC 时间戳向前回退的毫秒数，"
+                "用于裁掉尾部可能漏入的下一音节。仅对起音对齐生效；0 表示禁用。"
+            ),
+            param_type="int",
+            default=80,
+            minimum=0,
+            maximum=300,
+            step=10,
+            lrc_only=True,
+        ),
+        StageParam(
+            key="g2p_preroll_ms",
+            label="G2P 抢跑窗口 (ms)",
+            description=(
+                "下一句首字 G2P 规则扩展边界搜索左限。"
+                "0 关闭；清塞音/擦音起头建议 80–120。"
+            ),
+            param_type="int",
+            default=0,
+            minimum=0,
+            maximum=200,
+            step=10,
+            lrc_only=True,
+        ),
+        StageParam(
+            key="boundary_zcr_weight",
+            label="ZCR 谷底权重",
+            description="能量谷底寻优中过零率项权重 λ；0 为纯 RMS 谷底，0.1–0.3 可偏好静音间隙。",
+            param_type="float",
+            default=0.0,
+            minimum=0.0,
+            maximum=1.0,
+            step=0.05,
+            lrc_only=True,
+        ),
+        StageParam(
+            key="phoneme_align_mode",
+            label="音素对齐模式",
+            description=(
+                "fallback 边界音素级精修。off 关闭；local_cpu 使用 CTC 对齐；"
+                "remote 预留（尚未实现）。"
+            ),
+            param_type="choice",
+            default="off",
+            choices=("off", "local_cpu", "remote"),
+            lrc_only=True,
+        ),
+        StageParam(
+            key="phoneme_align_fallback_only",
+            label="仅 fallback 边界对齐",
+            description="音素对齐仅对 fallback 边界尝试；关闭则对所有边界尝试。",
+            param_type="bool",
+            default=True,
+            lrc_only=True,
+        ),
+        StageParam(
+            key="phoneme_align_remote_url",
+            label="远程对齐 URL",
+            description="P4 预留：phoneme_align_mode=remote 时的 HTTP 端点（尚未实现）。",
+            param_type="str",
+            default="",
+            lrc_only=True,
+        ),
+        StageParam(
+            key="phoneme_align_remote_timeout_s",
+            label="远程对齐超时 (s)",
+            description="P4 预留：远程音素对齐请求超时秒数。",
+            param_type="int",
+            default=30,
+            minimum=5,
+            maximum=120,
+            step=5,
+            lrc_only=True,
+        ),
     ],
     StageName.CONVERT.value: [
         StageParam(
@@ -342,6 +420,55 @@ STAGE_PARAMS: dict[str, list[StageParam]] = {
             description="不执行 Matchering 母带匹配，输出未经响度/频谱优化的混合曲。",
             param_type="bool",
             default=False,
+        ),
+        StageParam(
+            key="boundary_crossfade_ms",
+            label="句间交叉淡化 (ms)",
+            description=(
+                "slice_stitch 模式下相邻切片接缝的 overlap 交叉淡化时长。"
+                "0 保持现状（仅片内线 fade）；典型试听值 12–20。"
+            ),
+            param_type="int",
+            default=0,
+            minimum=0,
+            maximum=50,
+            step=1,
+            wizard=True,
+        ),
+        StageParam(
+            key="boundary_crossfade_curve",
+            label="交叉淡化曲线",
+            description="句间 overlap 的淡化曲线。equal_power 可保持中点能量；linear 与旧 fade 接近。",
+            param_type="choice",
+            default="equal_power",
+            choices=("linear", "equal_power"),
+        ),
+        StageParam(
+            key="boundary_zero_crossing",
+            label="零交叉对齐",
+            description="交叉淡化前在 overlap 区寻找零交叉点，减轻 click/pop。",
+            param_type="bool",
+            default=True,
+        ),
+        StageParam(
+            key="boundary_lufs_match_ms",
+            label="边界响度匹配 (ms)",
+            description="0 关闭；>0 在接缝两侧短时窗口做响度匹配（P3，默认关闭）。",
+            param_type="int",
+            default=0,
+            minimum=0,
+            maximum=500,
+            step=50,
+        ),
+        StageParam(
+            key="splice_wsola_search_ms",
+            label="WSOLA 相位搜索 (ms)",
+            description="0 关闭；legato 边界 NCC 相位微调半径（P3，默认关闭）。",
+            param_type="int",
+            default=0,
+            minimum=0,
+            maximum=30,
+            step=1,
         ),
     ],
 }

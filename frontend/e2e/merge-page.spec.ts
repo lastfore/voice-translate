@@ -61,6 +61,8 @@ test('merge page runs both modes and submits correct merge_mode', async ({ page 
   // Switch to slice_stitch and run again.
   capturedBody = null
   await page.getByTestId('mode-tab-slice_stitch').click()
+  await page.getByTestId('advanced-params-trigger').click()
+  await expect(page.getByTestId('param-boundary_crossfade_ms')).toBeVisible()
   await page.getByTestId('stage-run-submit').click()
   await expect.poll(() => capturedBody).toBeTruthy()
   expect(capturedBody.params.merge_mode).toBe('slice_stitch')

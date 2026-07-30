@@ -76,7 +76,7 @@ def test_build_from_slices_falls_back_to_original(tmp_path: Path, merge_mod) -> 
     )
 
     profile = merge_mod.PROFILES["balanced"]
-    timeline = merge_mod.build_from_slices(
+    timeline, _ = merge_mod.build_from_slices(
         manifest_path,
         converted_dir,
         slices_dir,
@@ -157,7 +157,7 @@ def test_build_vocal_track_whole_file_ignores_manifest(tmp_path: Path, merge_mod
     )
 
     profile = merge_mod.PROFILES["full"]
-    timeline = merge_mod.build_vocal_track(
+    timeline, _ = merge_mod.build_vocal_track(
         tmp_path / "full.wav",
         profile,
         manifest_path,
@@ -200,7 +200,7 @@ def test_build_from_slices_length_mismatch_balanced(tmp_path: Path, merge_mod) -
     )
 
     profile = merge_mod.PROFILES["balanced"]
-    timeline = merge_mod.build_from_slices(
+    timeline, _ = merge_mod.build_from_slices(
         manifest_path,
         converted_dir,
         slices_dir,

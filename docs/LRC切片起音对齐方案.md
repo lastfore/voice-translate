@@ -558,6 +558,8 @@ cd frontend && npx playwright test e2e/slice-page.spec.ts -g "lrc mode shows ons
 
 **后续可选（非 v1）：**
 
+- [LRC 切片能量谷底与安全边距方案（方案 B）](./LRC切片能量谷底与安全边距方案.md)（已实施：谷底优先 + fallback 安全边距）；
+
 - 切片 Tab 波形上可视化 `lrc_*` 与对齐切点；
 - 单片手动微调 `start_ms` / `end_ms`；
 - merge 阶段句间 equal-power crossfade（方案 C）。

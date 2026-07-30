@@ -12,6 +12,12 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+from lrc_g2p_preroll import lookup_preroll_ms
+from phoneme_align import PhonemeAlignMode, refine_boundary
+
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SLICES_ROOT = ROOT / "output" / "slices"
 
@@ -23,6 +29,7 @@ DEFAULT_SEARCH_MARGIN_MS = 400
 DEFAULT_ONSET_MIN_LEAD_SILENCE_MS = 80
 DEFAULT_MIN_SLICE_MS = 500
 DEFAULT_ONSET_ENERGY_THRESHOLD_DB = -40.0
+DEFAULT_SAFETY_MARGIN_MS = 80
 RMS_FRAME_MS = 10
 
 # [mm:ss.xx] or [mm:ss.xxx]
@@ -48,6 +55,13 @@ class BoundaryParams:
     onset_min_lead_silence_ms: int = DEFAULT_ONSET_MIN_LEAD_SILENCE_MS
     min_slice_ms: int = DEFAULT_MIN_SLICE_MS
     onset_energy_threshold_db: float = DEFAULT_ONSET_ENERGY_THRESHOLD_DB
+    safety_margin_ms: int = DEFAULT_SAFETY_MARGIN_MS
+    g2p_preroll_ms: int = 0
+    boundary_zcr_weight: float = 0.0
+    phoneme_align_mode: str = PhonemeAlignMode.OFF.value
+    phoneme_align_fallback_only: bool = True
+    phoneme_align_remote_url: str = ""
+    phoneme_align_remote_timeout_s: int = 30
 
 
 @dataclass(frozen=True)
@@ -56,6 +70,7 @@ class BoundaryDetectionResult:
     fallback: bool
     reason: str
     method: str = "lrc_strict"
+    safety_margin_applied_ms: int = 0
 
     @property
     def aligned(self) -> bool:
@@ -72,6 +87,9 @@ class BoundaryDiagnostic:
     reason: str
     method: str
     delta_ms: float
+    safety_margin_applied_ms: int = 0
+    g2p_preroll_ms_used: float = 0.0
+    phoneme_align_applied: bool = False
 
 
 def apply_fade(audio: np.ndarray, sr: int, fade_in_ms: int, fade_out_ms: int) -> np.ndarray:
@@ -190,6 +208,40 @@ def compute_rms_envelope(
     return np.array(time_values, dtype=np.float64), np.array(rms_values, dtype=np.float64)
 
 
+def compute_zcr_envelope(
+    audio: np.ndarray,
+    sr: int,
+    start_ms: float,
+    end_ms: float,
+    *,
+    frame_ms: int = RMS_FRAME_MS,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return (times_ms, zcr) aligned with RMS frame centers in [start_ms, end_ms]."""
+    start_sample = _ms_to_sample(start_ms, sr)
+    end_sample = min(_ms_to_sample(end_ms, sr), len(audio))
+    if end_sample <= start_sample:
+        return np.array([], dtype=np.float64), np.array([], dtype=np.float64)
+
+    segment = audio[start_sample:end_sample]
+    frame_samples = max(int(sr * frame_ms / 1000), 1)
+    hop_samples = max(frame_samples // 2, 1)
+    if segment.size < frame_samples:
+        return np.array([start_ms], dtype=np.float64), np.array([0.0], dtype=np.float64)
+
+    zcr_values: list[float] = []
+    time_values: list[float] = []
+    for offset in range(0, segment.size - frame_samples + 1, hop_samples):
+        frame = segment[offset : offset + frame_samples]
+        signs = np.sign(frame)
+        signs[signs == 0] = 1
+        crossings = int(np.sum(signs[1:] != signs[:-1]))
+        zcr_values.append(crossings / max(len(frame) - 1, 1))
+        center_sample = start_sample + offset + frame_samples // 2
+        time_values.append(center_sample / sr * 1000)
+
+    return np.array(time_values, dtype=np.float64), np.array(zcr_values, dtype=np.float64)
+
+
 def _detect_legato_onset(
     times: np.ndarray,
     envelope: np.ndarray,
@@ -214,6 +266,97 @@ def _detect_legato_onset(
     return float(times[best_idx])
 
 
+def _detect_energy_valley(
+    times: np.ndarray,
+    envelope: np.ndarray,
+    threshold: float,
+    valley_window_start_ms: float,
+    *,
+    zcr: np.ndarray | None = None,
+    zcr_weight: float = 0.0,
+) -> float | None:
+    """Pick the best valley frame below threshold; optional ZCR joint scoring."""
+    mask = times >= valley_window_start_ms
+    if not np.any(mask):
+        return None
+
+    indices = np.where(mask)[0]
+    candidates = [int(idx) for idx in indices if envelope[idx] < threshold]
+    if not candidates:
+        return None
+
+    if zcr_weight > 0 and zcr is not None and len(zcr) == len(envelope):
+        e_vals = np.array([float(envelope[idx]) for idx in candidates], dtype=np.float64)
+        z_vals = np.array([float(zcr[idx]) for idx in candidates], dtype=np.float64)
+        e_min, e_max = float(np.min(e_vals)), float(np.max(e_vals))
+        z_min, z_max = float(np.min(z_vals)), float(np.max(z_vals))
+        e_norm = (e_vals - e_min) / (e_max - e_min + 1e-12)
+        z_norm = (z_vals - z_min) / (z_max - z_min + 1e-12)
+        scores = e_norm + zcr_weight * z_norm
+        best_local = int(np.argmin(scores))
+        best_idx = candidates[best_local]
+        min_score = float(scores[best_local])
+        tied = [idx for idx, score in zip(candidates, scores) if float(score) == min_score]
+        best_idx = min(tied)
+        return float(times[best_idx])
+
+    min_rms = min(float(envelope[idx]) for idx in candidates)
+    best_idx = min(idx for idx in candidates if float(envelope[idx]) == min_rms)
+    return float(times[best_idx])
+
+
+def _apply_safety_margin(
+    t_cut: float,
+    *,
+    next_lrc_ts: float,
+    line_start_ms: float,
+    next_line_end_ms: float,
+    min_slice_ms: int,
+    safety_margin_ms: int,
+    is_fallback: bool,
+) -> tuple[float, int, str]:
+    """Return (t_cut, applied_ms, reason_suffix)."""
+    if not is_fallback or safety_margin_ms <= 0:
+        return t_cut, 0, ""
+
+    candidate = next_lrc_ts - safety_margin_ms
+    if (candidate - line_start_ms) < min_slice_ms:
+        return next_lrc_ts, 0, "safety_margin_skipped"
+    if (next_line_end_ms - candidate) < min_slice_ms:
+        return next_lrc_ts, 0, "safety_margin_skipped"
+
+    return candidate, safety_margin_ms, ""
+
+
+def _make_fallback_result(
+    reason: str,
+    *,
+    next_lrc_ts: float,
+    line_start_ms: float,
+    next_line_end_ms: float,
+    min_slice_ms: int,
+    safety_margin_ms: int,
+) -> BoundaryDetectionResult:
+    t_cut, applied_ms, suffix = _apply_safety_margin(
+        next_lrc_ts,
+        next_lrc_ts=next_lrc_ts,
+        line_start_ms=line_start_ms,
+        next_line_end_ms=next_line_end_ms,
+        min_slice_ms=min_slice_ms,
+        safety_margin_ms=safety_margin_ms,
+        is_fallback=True,
+    )
+    full_reason = f"{reason} {suffix}".strip() if suffix else reason
+    method = "lrc_fallback_margin" if applied_ms > 0 else "lrc_fallback"
+    return BoundaryDetectionResult(
+        t_cut=t_cut,
+        fallback=True,
+        reason=full_reason,
+        method=method,
+        safety_margin_applied_ms=applied_ms,
+    )
+
+
 def _apply_min_slice_guard(
     best_t: float,
     *,
@@ -221,21 +364,26 @@ def _apply_min_slice_guard(
     next_lrc_ts: float,
     next_line_end_ms: float,
     min_slice_ms: int,
+    safety_margin_ms: int,
     method: str,
 ) -> BoundaryDetectionResult:
     if (best_t - line_start_ms) < min_slice_ms:
-        return BoundaryDetectionResult(
-            t_cut=next_lrc_ts,
-            fallback=True,
-            reason="current_slice_too_short",
-            method="lrc_fallback",
+        return _make_fallback_result(
+            "current_slice_too_short",
+            next_lrc_ts=next_lrc_ts,
+            line_start_ms=line_start_ms,
+            next_line_end_ms=next_line_end_ms,
+            min_slice_ms=min_slice_ms,
+            safety_margin_ms=safety_margin_ms,
         )
     if (next_line_end_ms - best_t) < min_slice_ms:
-        return BoundaryDetectionResult(
-            t_cut=next_lrc_ts,
-            fallback=True,
-            reason="next_slice_too_short",
-            method="lrc_fallback",
+        return _make_fallback_result(
+            "next_slice_too_short",
+            next_lrc_ts=next_lrc_ts,
+            line_start_ms=line_start_ms,
+            next_line_end_ms=next_line_end_ms,
+            min_slice_ms=min_slice_ms,
+            safety_margin_ms=safety_margin_ms,
         )
     return BoundaryDetectionResult(
         t_cut=best_t,
@@ -252,42 +400,97 @@ def detect_boundary(
     line_start_ms: float,
     next_lrc_ts: float,
     next_line_end_ms: float,
+    next_line_text: str = "",
     search_margin_ms: int = DEFAULT_SEARCH_MARGIN_MS,
     onset_min_lead_silence_ms: int = DEFAULT_ONSET_MIN_LEAD_SILENCE_MS,
     min_slice_ms: int = DEFAULT_MIN_SLICE_MS,
     onset_energy_threshold_db: float = DEFAULT_ONSET_ENERGY_THRESHOLD_DB,
-) -> BoundaryDetectionResult:
+    safety_margin_ms: int = DEFAULT_SAFETY_MARGIN_MS,
+    g2p_preroll_ms: int = 0,
+    boundary_zcr_weight: float = 0.0,
+) -> tuple[BoundaryDetectionResult, float]:
     """Detect aligned cut point between adjacent lyric lines."""
-    window_start_ms = max(line_start_ms + min_slice_ms, next_lrc_ts - search_margin_ms)
+    g2p_used = 0.0
+    lookback_ms = search_margin_ms
+    if g2p_preroll_ms > 0 and next_line_text.strip():
+        pre_roll = lookup_preroll_ms(next_line_text, g2p_preroll_ms)
+        if pre_roll > 0:
+            g2p_used = pre_roll
+            lookback_ms = max(search_margin_ms, int(pre_roll))
+    window_start_ms = max(line_start_ms + min_slice_ms, next_lrc_ts - lookback_ms)
     window_end_ms = next_lrc_ts
 
     if window_end_ms <= window_start_ms:
-        return BoundaryDetectionResult(
-            t_cut=next_lrc_ts,
-            fallback=True,
-            reason="window_empty",
-            method="lrc_fallback",
+        return (
+            _make_fallback_result(
+                "window_empty",
+                next_lrc_ts=next_lrc_ts,
+                line_start_ms=line_start_ms,
+                next_line_end_ms=next_line_end_ms,
+                min_slice_ms=min_slice_ms,
+                safety_margin_ms=safety_margin_ms,
+            ),
+            g2p_used,
         )
 
     times, envelope = compute_rms_envelope(audio, sr, window_start_ms, window_end_ms)
     if envelope.size == 0:
-        return BoundaryDetectionResult(
-            t_cut=next_lrc_ts,
-            fallback=True,
-            reason="envelope_empty",
-            method="lrc_fallback",
+        return (
+            _make_fallback_result(
+                "envelope_empty",
+                next_lrc_ts=next_lrc_ts,
+                line_start_ms=line_start_ms,
+                next_line_end_ms=next_line_end_ms,
+                min_slice_ms=min_slice_ms,
+                safety_margin_ms=safety_margin_ms,
+            ),
+            g2p_used,
         )
+
+    zcr = None
+    if boundary_zcr_weight > 0:
+        z_times, zcr = compute_zcr_envelope(audio, sr, window_start_ms, window_end_ms)
+        if len(z_times) != len(times):
+            zcr = None
 
     peak = float(np.max(envelope))
     if peak <= 1e-12:
-        return BoundaryDetectionResult(
-            t_cut=next_lrc_ts,
-            fallback=True,
-            reason="silent_window",
-            method="lrc_fallback",
+        return (
+            _make_fallback_result(
+                "silent_window",
+                next_lrc_ts=next_lrc_ts,
+                line_start_ms=line_start_ms,
+                next_line_end_ms=next_line_end_ms,
+                min_slice_ms=min_slice_ms,
+                safety_margin_ms=safety_margin_ms,
+            ),
+            g2p_used,
         )
 
     threshold = peak * (10.0 ** (onset_energy_threshold_db / 20.0))
+    valley_window_start_ms = window_start_ms + (window_end_ms - window_start_ms) * 0.5
+    valley_t = _detect_energy_valley(
+        times,
+        envelope,
+        threshold,
+        valley_window_start_ms,
+        zcr=zcr,
+        zcr_weight=boundary_zcr_weight,
+    )
+    if valley_t is not None:
+        return (
+            _apply_min_slice_guard(
+                valley_t,
+                line_start_ms=line_start_ms,
+                next_lrc_ts=next_lrc_ts,
+                next_line_end_ms=next_line_end_ms,
+                min_slice_ms=min_slice_ms,
+                safety_margin_ms=safety_margin_ms,
+                method="valley",
+            ),
+            g2p_used,
+        )
+
     lead_frames = max(int(round(onset_min_lead_silence_ms / RMS_FRAME_MS)), 1)
 
     best_t: float | None = None
@@ -303,28 +506,41 @@ def detect_boundary(
     if best_t is None:
         legato_t = _detect_legato_onset(times, envelope, threshold)
         if legato_t is None:
-            return BoundaryDetectionResult(
-                t_cut=next_lrc_ts,
-                fallback=True,
-                reason="no_onset_candidate",
-                method="lrc_fallback",
+            return (
+                _make_fallback_result(
+                    "no_onset_candidate",
+                    next_lrc_ts=next_lrc_ts,
+                    line_start_ms=line_start_ms,
+                    next_line_end_ms=next_line_end_ms,
+                    min_slice_ms=min_slice_ms,
+                    safety_margin_ms=safety_margin_ms,
+                ),
+                g2p_used,
             )
-        return _apply_min_slice_guard(
-            legato_t,
+        return (
+            _apply_min_slice_guard(
+                legato_t,
+                line_start_ms=line_start_ms,
+                next_lrc_ts=next_lrc_ts,
+                next_line_end_ms=next_line_end_ms,
+                min_slice_ms=min_slice_ms,
+                safety_margin_ms=safety_margin_ms,
+                method="legato",
+            ),
+            g2p_used,
+        )
+
+    return (
+        _apply_min_slice_guard(
+            best_t,
             line_start_ms=line_start_ms,
             next_lrc_ts=next_lrc_ts,
             next_line_end_ms=next_line_end_ms,
             min_slice_ms=min_slice_ms,
-            method="legato",
-        )
-
-    return _apply_min_slice_guard(
-        best_t,
-        line_start_ms=line_start_ms,
-        next_lrc_ts=next_lrc_ts,
-        next_line_end_ms=next_line_end_ms,
-        min_slice_ms=min_slice_ms,
-        method="silence",
+            safety_margin_ms=safety_margin_ms,
+            method="silence",
+        ),
+        g2p_used,
     )
 
 
@@ -334,12 +550,14 @@ def compute_boundaries(
     sr: int,
     duration_ms: float,
     params: BoundaryParams,
-) -> tuple[list[float], list[bool], list[BoundaryDiagnostic]]:
+) -> tuple[list[float], list[bool], list[BoundaryDiagnostic], int, int]:
     """Return aligned start_ms per slice, entry-boundary fallback flags, and diagnostics."""
     n = len(lyrics)
     starts = [lyrics[0].start_ms]
     fallbacks = [False]
     diagnostics: list[BoundaryDiagnostic] = []
+    phoneme_applied_count = 0
+    phoneme_skipped_remote_count = 0
 
     for i in range(n - 1):
         next_lrc = lyrics[i + 1].start_ms
@@ -352,18 +570,65 @@ def compute_boundaries(
                 reason="lrc_strict_mode",
                 method="lrc_strict",
             )
+            g2p_used = 0.0
         else:
-            result = detect_boundary(
+            result, g2p_used = detect_boundary(
                 audio,
                 sr,
                 line_start_ms=starts[i],
                 next_lrc_ts=next_lrc,
                 next_line_end_ms=next_line_end_ms,
+                next_line_text=lyrics[i + 1].text,
                 search_margin_ms=params.search_margin_ms,
                 onset_min_lead_silence_ms=params.onset_min_lead_silence_ms,
                 min_slice_ms=params.min_slice_ms,
                 onset_energy_threshold_db=params.onset_energy_threshold_db,
+                safety_margin_ms=params.safety_margin_ms,
+                g2p_preroll_ms=params.g2p_preroll_ms,
+                boundary_zcr_weight=params.boundary_zcr_weight,
             )
+
+        phoneme_applied = False
+        if params.phoneme_align_mode != PhonemeAlignMode.OFF.value:
+            align_window_start = max(
+                starts[i] + params.min_slice_ms,
+                next_lrc - params.search_margin_ms,
+            )
+            if params.g2p_preroll_ms > 0:
+                pre_roll = lookup_preroll_ms(lyrics[i + 1].text, params.g2p_preroll_ms)
+                if pre_roll > 0:
+                    align_window_start = max(
+                        align_window_start,
+                        next_lrc - max(params.search_margin_ms, int(pre_roll)),
+                    )
+            align_result = refine_boundary(
+                mode=params.phoneme_align_mode,
+                audio=audio,
+                sr=sr,
+                next_line_text=lyrics[i + 1].text,
+                window_start_ms=align_window_start,
+                window_end_ms=next_lrc + 50.0,
+                fallback=result.fallback,
+                fallback_only=params.phoneme_align_fallback_only,
+                remote_url=params.phoneme_align_remote_url,
+                remote_timeout_s=params.phoneme_align_remote_timeout_s,
+            )
+            if align_result.reason == "remote_not_implemented":
+                phoneme_skipped_remote_count += 1
+            if align_result.onset_ms is not None:
+                refined = _apply_min_slice_guard(
+                    align_result.onset_ms,
+                    line_start_ms=starts[i],
+                    next_lrc_ts=next_lrc,
+                    next_line_end_ms=next_line_end_ms,
+                    min_slice_ms=params.min_slice_ms,
+                    safety_margin_ms=params.safety_margin_ms,
+                    method="phoneme",
+                )
+                if not refined.fallback:
+                    result = refined
+                    phoneme_applied = True
+                    phoneme_applied_count += 1
 
         starts.append(result.t_cut)
         fallbacks.append(result.fallback)
@@ -377,19 +642,27 @@ def compute_boundaries(
                 reason=result.reason,
                 method=result.method,
                 delta_ms=round(next_lrc - result.t_cut, 2),
+                safety_margin_applied_ms=result.safety_margin_applied_ms,
+                g2p_preroll_ms_used=round(g2p_used, 2),
+                phoneme_align_applied=phoneme_applied,
             )
         )
 
-    return starts, fallbacks, diagnostics
+    return starts, fallbacks, diagnostics, phoneme_applied_count, phoneme_skipped_remote_count
 
 
 def format_boundary_diagnostic_line(item: BoundaryDiagnostic) -> str:
     status = "aligned" if item.aligned else "fallback"
     delta = f" delta={item.delta_ms:.2f}ms" if item.delta_ms > 0.01 else ""
+    margin = (
+        f" margin={item.safety_margin_applied_ms}ms"
+        if item.safety_margin_applied_ms > 0
+        else ""
+    )
     return (
         f"[BOUNDARY] i={item.boundary_index:02d} {item.next_slice_id} "
         f"{status} method={item.method} reason={item.reason} "
-        f"t_cut={item.t_cut_ms:.2f} lrc={item.next_lrc_ms:.2f}{delta}"
+        f"t_cut={item.t_cut_ms:.2f} lrc={item.next_lrc_ms:.2f}{delta}{margin}"
     )
 
 
@@ -404,6 +677,13 @@ def slice_vocals_lrc(
     onset_min_lead_silence_ms: int = DEFAULT_ONSET_MIN_LEAD_SILENCE_MS,
     min_slice_ms: int = DEFAULT_MIN_SLICE_MS,
     onset_energy_threshold_db: float = DEFAULT_ONSET_ENERGY_THRESHOLD_DB,
+    safety_margin_ms: int = DEFAULT_SAFETY_MARGIN_MS,
+    g2p_preroll_ms: int = 0,
+    boundary_zcr_weight: float = 0.0,
+    phoneme_align_mode: str = PhonemeAlignMode.OFF.value,
+    phoneme_align_fallback_only: bool = True,
+    phoneme_align_remote_url: str = "",
+    phoneme_align_remote_timeout_s: int = 30,
 ) -> tuple[list[Path], Path, dict[str, object]]:
     if not lrc_path.exists():
         raise FileNotFoundError(f"LRC file not found: {lrc_path}")
@@ -425,13 +705,21 @@ def slice_vocals_lrc(
         onset_min_lead_silence_ms=onset_min_lead_silence_ms,
         min_slice_ms=min_slice_ms,
         onset_energy_threshold_db=onset_energy_threshold_db,
+        safety_margin_ms=safety_margin_ms,
+        g2p_preroll_ms=g2p_preroll_ms,
+        boundary_zcr_weight=boundary_zcr_weight,
+        phoneme_align_mode=phoneme_align_mode,
+        phoneme_align_fallback_only=phoneme_align_fallback_only,
+        phoneme_align_remote_url=phoneme_align_remote_url,
+        phoneme_align_remote_timeout_s=phoneme_align_remote_timeout_s,
     )
 
-    starts, fallbacks, diagnostics = compute_boundaries(
-        lyrics, audio, sr, duration_ms, params
+    starts, fallbacks, diagnostics, phoneme_applied_count, phoneme_skipped_remote_count = (
+        compute_boundaries(lyrics, audio, sr, duration_ms, params)
     )
 
     aligned_count = 0
+    valley_count = 0
     fallback_count = 0
     first_fallback_example: dict[str, object] | None = None
 
@@ -452,6 +740,10 @@ def slice_vocals_lrc(
 
         if index > 0 and not boundary_in_fallback and start_ms < lrc_start_ms:
             aligned_count += 1
+        if index > 0 and not boundary_in_fallback:
+            diag = diagnostics[index - 1]
+            if diag.method == "valley_onset":
+                valley_count += 1
         if index > 0 and boundary_in_fallback:
             fallback_count += 1
             if first_fallback_example is None:
@@ -482,6 +774,16 @@ def slice_vocals_lrc(
                 "text": line.text,
                 "lrc_line": line.line_no,
                 "boundary_in_fallback": boundary_in_fallback,
+                **(
+                    {
+                        "boundary_method": diagnostics[index - 1].method,
+                        "boundary_reason": diagnostics[index - 1].reason,
+                        "phoneme_align_applied": diagnostics[index - 1].phoneme_align_applied,
+                        "g2p_preroll_ms_used": diagnostics[index - 1].g2p_preroll_ms_used,
+                    }
+                    if index > 0
+                    else {}
+                ),
             }
         )
 
@@ -505,10 +807,19 @@ def slice_vocals_lrc(
         "onset_min_lead_silence_ms": onset_min_lead_silence_ms,
         "min_slice_ms": min_slice_ms,
         "onset_energy_threshold_db": onset_energy_threshold_db,
+        "safety_margin_ms": safety_margin_ms,
+        "g2p_preroll_ms": g2p_preroll_ms,
+        "boundary_zcr_weight": boundary_zcr_weight,
+        "phoneme_align_mode": phoneme_align_mode,
+        "phoneme_align_fallback_only": phoneme_align_fallback_only,
+        "phoneme_align_remote_url": phoneme_align_remote_url,
+        "phoneme_align_applied_count": phoneme_applied_count,
+        "phoneme_align_skipped_remote_count": phoneme_skipped_remote_count,
         "sample_rate": sr,
         "fade_in_ms": FADE_IN_MS,
         "fade_out_ms": FADE_OUT_MS,
         "aligned_boundary_count": aligned_count,
+        "valley_boundary_count": valley_count,
         "fallback_boundary_count": fallback_count,
         "boundary_diagnostics": [
             {
@@ -520,6 +831,9 @@ def slice_vocals_lrc(
                 "reason": item.reason,
                 "method": item.method,
                 "delta_ms": item.delta_ms,
+                "safety_margin_applied_ms": item.safety_margin_applied_ms,
+                "g2p_preroll_ms_used": item.g2p_preroll_ms_used,
+                "phoneme_align_applied": item.phoneme_align_applied,
             }
             for item in diagnostics
         ],
@@ -575,6 +889,12 @@ def main() -> int:
         default=DEFAULT_ONSET_ENERGY_THRESHOLD_DB,
         help="Onset threshold relative to window peak in dB (default: -40)",
     )
+    parser.add_argument(
+        "--safety-margin-ms",
+        type=int,
+        default=DEFAULT_SAFETY_MARGIN_MS,
+        help="Fallback margin before next LRC timestamp in ms (default: 80)",
+    )
     args = parser.parse_args()
 
     song_name = args.song_name or args.lrc.stem
@@ -591,6 +911,7 @@ def main() -> int:
             onset_min_lead_silence_ms=args.onset_min_lead_silence_ms,
             min_slice_ms=args.min_slice_ms,
             onset_energy_threshold_db=args.onset_energy_threshold_db,
+            safety_margin_ms=args.safety_margin_ms,
         )
     except Exception as exc:  # noqa: BLE001 - CLI entrypoint
         print(f"Error: {exc}", file=sys.stderr)
@@ -604,6 +925,7 @@ def main() -> int:
     print(f"Wrote manifest: {manifest_path}")
     print(
         f"Boundaries: aligned={manifest.get('aligned_boundary_count', 0)} "
+        f"valley={manifest.get('valley_boundary_count', 0)} "
         f"fallback={manifest.get('fallback_boundary_count', 0)} "
         f"mode={manifest.get('boundary_mode')}"
     )

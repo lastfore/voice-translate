@@ -27,6 +27,15 @@ SILENCE_THRESHOLD_DB = -40.0
 SILENCE_FLOOR = 0.01
 
 
+@dataclass(frozen=True)
+class SpliceParams:
+    boundary_crossfade_ms: int = 0
+    boundary_crossfade_curve: str = "equal_power"
+    boundary_zero_crossing: bool = True
+    boundary_lufs_match_ms: int = 0
+    splice_wsola_search_ms: int = 0
+
+
 @dataclass
 class Profile:
     name: str
@@ -175,6 +184,243 @@ def overlay_segment(
     return timeline
 
 
+def effective_crossfade_ms(base_ms: int, boundary_method: str | None) -> int:
+    if base_ms <= 0:
+        return 0
+    if boundary_method == "legato_onset":
+        return min(base_ms, 10)
+    return base_ms
+
+
+def compute_crossfade_gains(num_samples: int, curve: str) -> tuple[np.ndarray, np.ndarray]:
+    if num_samples <= 0:
+        return np.array([], dtype=np.float32), np.array([], dtype=np.float32)
+    t = np.linspace(0.0, 1.0, num_samples, dtype=np.float32)
+    if curve == "linear":
+        return 1.0 - t, t
+    g_out = np.cos(t * np.pi / 2.0)
+    g_in = np.sin(t * np.pi / 2.0)
+    return g_out, g_in
+
+
+def find_zero_crossing_offset(samples: np.ndarray, search_radius: int) -> int:
+    """Find offset within ±search_radius for a near-zero crossing (same-slope preference)."""
+    if search_radius <= 0 or len(samples) < 3:
+        return 0
+
+    best_offset = 0
+    best_score = float("inf")
+    for offset in range(-search_radius, search_radius + 1):
+        idx = offset
+        if idx < 1 or idx >= len(samples) - 1:
+            continue
+        prev_v = float(samples[idx - 1])
+        cur_v = float(samples[idx])
+        next_v = float(samples[idx + 1])
+        if prev_v * next_v > 0:
+            continue
+        slope = next_v - prev_v
+        score = abs(cur_v) + (0.001 if slope >= 0 else 0.0)
+        if score < best_score:
+            best_score = score
+            best_offset = offset
+    return best_offset
+
+
+def _get_boundary_method(manifest: dict, slice_index: int) -> str | None:
+    if slice_index <= 0:
+        return None
+    slices = manifest.get("slices") or []
+    if slice_index < len(slices):
+        method = slices[slice_index].get("boundary_method")
+        if method:
+            return str(method)
+    diagnostics = manifest.get("boundary_diagnostics") or []
+    diag_index = slice_index - 1
+    if diag_index < len(diagnostics):
+        return str(diagnostics[diag_index].get("method") or "")
+    return None
+
+
+def _apply_segment_fades(
+    segment: np.ndarray,
+    sr: int,
+    fade_in_ms: int,
+    fade_out_ms: int,
+    *,
+    skip_fade_in: bool = False,
+    skip_fade_out: bool = False,
+) -> np.ndarray:
+    fade_in = 0 if skip_fade_in else fade_in_ms
+    fade_out = 0 if skip_fade_out else fade_out_ms
+    return apply_fade(segment, sr, fade_in, fade_out)
+
+
+def overlay_with_boundary_crossfade(
+    timeline: np.ndarray,
+    segment: np.ndarray,
+    boundary_sample: int,
+    splice: SpliceParams,
+    sr: int,
+    boundary_method: str | None,
+    fade_in_ms: int,
+    fade_out_ms: int,
+) -> tuple[np.ndarray, dict[str, object] | None]:
+    """Place segment with equal-power/linear crossfade centered on boundary_sample."""
+    tau_ms = effective_crossfade_ms(splice.boundary_crossfade_ms, boundary_method)
+    overlap = int(tau_ms * sr / 1000)
+    if overlap < 2:
+        timeline = overlay_segment(timeline, segment, boundary_sample, fade_in_ms, fade_out_ms, sr)
+        return timeline, None
+
+    start_pos = boundary_sample - overlap // 2
+    end_pos = start_pos + len(segment)
+    if end_pos > len(timeline):
+        timeline = np.pad(timeline, (0, end_pos - len(timeline)))
+
+    head_len = min(overlap, len(segment))
+    zc_offset = 0
+    head_start = 0
+    if splice.boundary_zero_crossing and head_len >= 3:
+        search = min(int(sr * 5 / 1000), max(overlap // 4, 1))
+        zc_offset = find_zero_crossing_offset(segment[: head_len + search], search)
+        head_start = max(0, zc_offset)
+        head_len = min(overlap, len(segment) - head_start)
+
+    tail_start = start_pos
+    tail_end = tail_start + head_len
+    tail_a = timeline[tail_start:tail_end].copy()
+    head_b = segment[head_start : head_start + head_len].astype(np.float32, copy=False)
+
+    if len(tail_a) < head_len:
+        tail_a = np.pad(tail_a, (0, head_len - len(tail_a)))
+    elif len(tail_a) > head_len:
+        tail_a = tail_a[:head_len]
+
+    g_out, g_in = compute_crossfade_gains(head_len, splice.boundary_crossfade_curve)
+    mixed = g_out * tail_a + g_in * head_b
+    timeline[tail_start:tail_end] = mixed
+
+    remainder = segment[head_start + head_len :]
+    if remainder.size > 0:
+        rem = _apply_segment_fades(remainder, sr, fade_in_ms, fade_out_ms, skip_fade_in=True)
+        rem_start = tail_end
+        rem_end = rem_start + len(rem)
+        if rem_end > len(timeline):
+            timeline = np.pad(timeline, (0, rem_end - len(timeline)))
+        timeline[rem_start:rem_end] += rem
+
+    meta: dict[str, object] = {
+        "boundary_sample": boundary_sample,
+        "tau_ms": tau_ms,
+        "overlap_samples": head_len,
+        "boundary_method": boundary_method or "",
+        "zero_crossing_offset": zc_offset,
+        "curve": splice.boundary_crossfade_curve,
+    }
+    return timeline, meta
+
+
+def _rms_db(audio: np.ndarray) -> float:
+    return float(20.0 * np.log10(max(rms(audio), 1e-10)))
+
+
+def apply_boundary_lufs_match(
+    prev_segment: np.ndarray,
+    segment: np.ndarray,
+    window_ms: int,
+    sr: int,
+) -> np.ndarray:
+    """Approximate boundary loudness match (RMS dB) with smooth gain envelope on segment."""
+    if window_ms <= 0 or segment.size == 0 or prev_segment.size == 0:
+        return segment
+
+    window_samples = int(window_ms * sr / 1000)
+    if window_samples <= 0:
+        return segment
+
+    tail = prev_segment[-window_samples:]
+    head = segment[:window_samples]
+    if tail.size == 0 or head.size == 0:
+        return segment
+
+    delta_db = _rms_db(tail) - _rms_db(head)
+    if abs(delta_db) <= 2.0:
+        return segment
+
+    target_gain = 10.0 ** (delta_db / 20.0)
+    fade_len = min(len(segment), max(int(sr * 0.05), window_samples))
+    envelope = np.ones(len(segment), dtype=np.float32)
+    t = np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
+    envelope[:fade_len] = target_gain + (1.0 - target_gain) * t
+    return (segment * envelope).astype(np.float32)
+
+
+def _normalized_cross_correlation(a: np.ndarray, b: np.ndarray) -> float:
+    if a.size == 0 or b.size == 0 or a.size != b.size:
+        return -1.0
+    a = a.astype(np.float64, copy=False)
+    b = b.astype(np.float64, copy=False)
+    denom = np.linalg.norm(a) * np.linalg.norm(b)
+    if denom < 1e-12:
+        return -1.0
+    return float(np.dot(a, b) / denom)
+
+
+def ncc_splice_offset(
+    prev_segment: np.ndarray,
+    segment: np.ndarray,
+    search_ms: int,
+    sr: int,
+) -> int:
+    """Return sample shift for segment to maximize NCC with prev tail (±search_ms)."""
+    if search_ms <= 0:
+        return 0
+
+    delta_samples = int(search_ms * sr / 1000)
+    ref_len = min(len(prev_segment), len(segment), 2 * delta_samples)
+    if ref_len < 8:
+        return 0
+
+    tail = prev_segment[-ref_len:]
+    head = segment[:ref_len]
+    step = max(int(sr / 1000), 1)
+    best_delta = 0
+    best_score = -2.0
+
+    for delta in range(-delta_samples, delta_samples + 1, step):
+        if delta >= 0:
+            a = tail[delta:]
+            b = head[: ref_len - delta]
+        else:
+            a = tail[: ref_len + delta]
+            b = head[-delta:]
+        if a.size < 8 or b.size < 8:
+            continue
+        n = min(a.size, b.size)
+        score = _normalized_cross_correlation(a[:n], b[:n])
+        if score > best_score:
+            best_score = score
+            best_delta = delta
+    return best_delta
+
+
+def shift_segment_phase(segment: np.ndarray, delta_samples: int) -> np.ndarray:
+    """Circular-ish shift for splice phase tweak (pad/truncate, no manifest change)."""
+    if delta_samples == 0 or segment.size == 0:
+        return segment
+    if delta_samples > 0:
+        if delta_samples >= len(segment):
+            return np.zeros_like(segment)
+        return np.concatenate(
+            [np.zeros(delta_samples, dtype=np.float32), segment[:-delta_samples]]
+        )
+    shift = -delta_samples
+    if shift >= len(segment):
+        return np.zeros_like(segment)
+    return np.concatenate([segment[shift:], np.zeros(shift, dtype=np.float32)])
+
+
 def load_manifest(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -246,10 +492,15 @@ def build_from_slices(
     slices_dir: Path,
     profile: Profile,
     original_vocals: Path | None,
-) -> np.ndarray:
+    *,
+    splice: SpliceParams | None = None,
+) -> tuple[np.ndarray, list[dict[str, object]]]:
     manifest = load_manifest(manifest_path)
     fade_in_ms = int(manifest.get("fade_in_ms", 8))
     fade_out_ms = int(manifest.get("fade_out_ms", 15))
+    splice = splice or SpliceParams()
+    crossfade_enabled = splice.boundary_crossfade_ms > 0
+    splice_logs: list[dict[str, object]] = []
 
     if original_vocals is not None:
         ref_audio, ref_sr = load_audio(original_vocals)
@@ -262,7 +513,8 @@ def build_from_slices(
 
     converted_count = 0
     fallback_count = 0
-    for item in manifest["slices"]:
+    prev_segment: np.ndarray | None = None
+    for slice_index, item in enumerate(manifest["slices"]):
         original_slice_path = slices_dir / item["file"]
         converted_path = converted_dir / item["file"]
         if converted_path.exists():
@@ -297,8 +549,74 @@ def build_from_slices(
         if profile.rms_match and reference_segment is not None:
             segment = match_rms_level(segment, reference_segment)
 
+        boundary_method = _get_boundary_method(manifest, slice_index)
+        boundary_meta_extra: dict[str, object] = {}
+
+        if slice_index > 0 and prev_segment is not None:
+            if splice.boundary_lufs_match_ms > 0:
+                segment = apply_boundary_lufs_match(
+                    prev_segment,
+                    segment,
+                    splice.boundary_lufs_match_ms,
+                    TARGET_SR,
+                )
+                boundary_meta_extra["lufs_match_ms"] = splice.boundary_lufs_match_ms
+            if (
+                splice.splice_wsola_search_ms > 0
+                and boundary_method == "legato_onset"
+            ):
+                wsola_delta = ncc_splice_offset(
+                    prev_segment,
+                    segment,
+                    splice.splice_wsola_search_ms,
+                    TARGET_SR,
+                )
+                if wsola_delta != 0:
+                    segment = shift_segment_phase(segment, wsola_delta)
+                    boundary_meta_extra["wsola_delta_samples"] = wsola_delta
+
         start = int(item["start_ms"] * TARGET_SR / 1000)
-        timeline = overlay_segment(timeline, segment, start, fade_in_ms, fade_out_ms, TARGET_SR)
+        use_crossfade = crossfade_enabled and slice_index > 0
+        if use_crossfade:
+            seg_for_overlay = _apply_segment_fades(
+                segment,
+                TARGET_SR,
+                fade_in_ms,
+                fade_out_ms,
+                skip_fade_in=True,
+                skip_fade_out=True,
+            )
+            timeline, boundary_meta = overlay_with_boundary_crossfade(
+                timeline,
+                seg_for_overlay,
+                start,
+                splice,
+                TARGET_SR,
+                boundary_method,
+                fade_in_ms,
+                fade_out_ms,
+            )
+            if boundary_meta is not None:
+                boundary_meta["slice_id"] = item.get("id", f"slice_{slice_index:03d}")
+                boundary_meta.update(boundary_meta_extra)
+                splice_logs.append(boundary_meta)
+        else:
+            if crossfade_enabled and slice_index == 0:
+                timeline = overlay_segment(timeline, segment, start, fade_in_ms, 0, TARGET_SR)
+            else:
+                timeline = overlay_segment(
+                    timeline, segment, start, fade_in_ms, fade_out_ms, TARGET_SR
+                )
+            if slice_index > 0 and boundary_meta_extra:
+                splice_logs.append(
+                    {
+                        "slice_id": item.get("id", f"slice_{slice_index:03d}"),
+                        "boundary_method": boundary_method or "",
+                        **boundary_meta_extra,
+                    }
+                )
+
+        prev_segment = segment.copy()
 
     if fallback_count:
         print(
@@ -306,7 +624,7 @@ def build_from_slices(
             file=sys.stderr,
         )
 
-    return timeline.astype(np.float32)
+    return timeline.astype(np.float32), splice_logs
 
 
 def _resolve_vocals_input(vocals: Path, profile: Profile) -> Path:
@@ -328,7 +646,9 @@ def build_vocal_track(
     manifest: Path | None,
     original_vocals: Path | None,
     slices_dir: Path | None,
-) -> np.ndarray:
+    *,
+    splice: SpliceParams | None = None,
+) -> tuple[np.ndarray, list[dict[str, object]]]:
     vocals = _resolve_vocals_input(vocals, profile)
     manifest_path = resolve_manifest(vocals, manifest)
     # Slice stitching only applies when --vocals points at a converted slices directory.
@@ -339,7 +659,9 @@ def build_vocal_track(
     if use_slices:
         converted_dir = vocals if vocals.is_dir() else vocals.parent
         slice_ref_dir = slices_dir or manifest_path.parent
-        return build_from_slices(manifest_path, converted_dir, slice_ref_dir, profile, original_vocals)
+        return build_from_slices(
+            manifest_path, converted_dir, slice_ref_dir, profile, original_vocals, splice=splice
+        )
 
     if vocals.is_dir():
         flacs = sorted(vocals.glob("*.flac")) + sorted(vocals.glob("*.wav"))
@@ -350,7 +672,7 @@ def build_vocal_track(
             )
         vocals = flacs[0]
 
-    return build_from_whole_track(vocals, profile, original_vocals)
+    return build_from_whole_track(vocals, profile, original_vocals), []
 
 
 def clean_instrumental(
@@ -500,13 +822,61 @@ def merge_audio(
     skip_mastering: bool = False,
     model_dir: Path = DEFAULT_MODEL_DIR,
     on_line: Callable[[str], None] | None = None,
+    splice: SpliceParams | None = None,
 ) -> tuple[Path, Path]:
     profile = PROFILES[profile_name]
     output_dir.mkdir(parents=True, exist_ok=True)
+    splice = splice or SpliceParams()
 
-    vocal_track = build_vocal_track(vocals, profile, manifest, original_vocals, slices_dir)
+    vocal_track, splice_logs = build_vocal_track(
+        vocals, profile, manifest, original_vocals, slices_dir, splice=splice
+    )
     vocals_out = output_dir / "vocals.flac"
     write_flac(vocals_out, vocal_track, TARGET_SR)
+
+    if (
+        profile.stitch_slices
+        and splice_logs
+        and (
+            splice.boundary_crossfade_ms > 0
+            or splice.boundary_lufs_match_ms > 0
+            or splice.splice_wsola_search_ms > 0
+        )
+    ):
+        if on_line:
+            on_line(
+                f"Splice crossfade enabled: boundary_crossfade_ms={splice.boundary_crossfade_ms} "
+                f"curve={splice.boundary_crossfade_curve} boundaries={len(splice_logs)}"
+            )
+            if splice.boundary_lufs_match_ms > 0:
+                on_line(f"Splice LUFS match window={splice.boundary_lufs_match_ms}ms")
+            if splice.splice_wsola_search_ms > 0:
+                on_line(f"Splice WSOLA search=±{splice.splice_wsola_search_ms}ms (legato only)")
+            for entry in splice_logs:
+                wsola = entry.get("wsola_delta_samples")
+                wsola_text = f" wsola={wsola}" if wsola else ""
+                on_line(
+                    f"[SPLICE] {entry.get('slice_id')} tau_ms={entry.get('tau_ms')} "
+                    f"overlap={entry.get('overlap_samples')} method={entry.get('boundary_method')} "
+                    f"zc_offset={entry.get('zero_crossing_offset')}{wsola_text}"
+                )
+        splice_meta_path = output_dir / "splice_meta.json"
+        splice_meta_path.write_text(
+            json.dumps(
+                {
+                    "boundary_crossfade_ms": splice.boundary_crossfade_ms,
+                    "boundary_crossfade_curve": splice.boundary_crossfade_curve,
+                    "boundary_zero_crossing": splice.boundary_zero_crossing,
+                    "boundary_lufs_match_ms": splice.boundary_lufs_match_ms,
+                    "splice_wsola_search_ms": splice.splice_wsola_search_ms,
+                    "boundaries": splice_logs,
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
     inst_audio, inst_sr = load_audio(instrumental)
     inst_audio = resample_audio(inst_audio, inst_sr, TARGET_SR)

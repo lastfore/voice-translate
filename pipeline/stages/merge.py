@@ -50,6 +50,11 @@ def run_merge(
     vocals_gain_db: float = 0.0,
     instrumental_gain_db: float = 0.0,
     skip_mastering: bool = False,
+    boundary_crossfade_ms: int = 0,
+    boundary_crossfade_curve: str = "equal_power",
+    boundary_zero_crossing: bool = True,
+    boundary_lufs_match_ms: int = 0,
+    splice_wsola_search_ms: int = 0,
     on_progress: Callable[[ProgressEvent], None] | None = None,
     stage_log: StageLogWriter | None = None,
 ) -> MergeResult:
@@ -85,10 +90,22 @@ def run_merge(
             skip_mastering=str(skip_mastering).lower(),
             vocals_gain_db=str(vocals_gain_db),
             instrumental_gain_db=str(instrumental_gain_db),
+            boundary_crossfade_ms=str(boundary_crossfade_ms),
+            boundary_crossfade_curve=boundary_crossfade_curve,
+            boundary_zero_crossing=str(boundary_zero_crossing).lower(),
+            boundary_lufs_match_ms=str(boundary_lufs_match_ms),
+            splice_wsola_search_ms=str(splice_wsola_search_ms),
         )
 
     _emit(f"Merging with profile={profile}", 5.0)
     merge_mod = _load_merge_module()
+    splice = merge_mod.SpliceParams(
+        boundary_crossfade_ms=boundary_crossfade_ms,
+        boundary_crossfade_curve=boundary_crossfade_curve,
+        boundary_zero_crossing=boundary_zero_crossing,
+        boundary_lufs_match_ms=boundary_lufs_match_ms,
+        splice_wsola_search_ms=splice_wsola_search_ms,
+    )
 
     def _karaoke_line(line: str) -> None:
         if stage_log:
@@ -110,6 +127,7 @@ def run_merge(
         instrumental_gain_db=instrumental_gain_db,
         skip_mastering=skip_mastering,
         on_line=_karaoke_line,
+        splice=splice,
     )
     _emit("Merge complete", 100.0)
     return MergeResult(vocals=vocals_out, mixed=mixed_out, merged_dir=output_dir)

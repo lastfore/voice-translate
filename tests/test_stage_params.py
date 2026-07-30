@@ -32,6 +32,7 @@ def test_collect_params_skips_vad_in_lrc_mode() -> None:
     assert "vad_threshold" not in out
     assert "boundary_mode" in out
     assert "onset_energy_threshold_db" in out
+    assert "safety_margin_ms" in out
 
 
 def test_collect_params_skips_lrc_in_vad_mode() -> None:

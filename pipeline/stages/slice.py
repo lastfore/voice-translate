@@ -56,6 +56,13 @@ def run_slice(
     onset_min_lead_silence_ms: int = 80,
     min_slice_ms: int = 500,
     onset_energy_threshold_db: float = -40.0,
+    safety_margin_ms: int = 80,
+    g2p_preroll_ms: int = 0,
+    boundary_zcr_weight: float = 0.0,
+    phoneme_align_mode: str = "off",
+    phoneme_align_fallback_only: bool = True,
+    phoneme_align_remote_url: str = "",
+    phoneme_align_remote_timeout_s: int = 30,
     on_progress: Callable[[ProgressEvent], None] | None = None,
     stage_log: StageLogWriter | None = None,
 ) -> SliceResult:
@@ -98,6 +105,11 @@ def run_slice(
                 onset_min_lead_silence_ms=str(onset_min_lead_silence_ms),
                 min_slice_ms=str(min_slice_ms),
                 onset_energy_threshold_db=str(onset_energy_threshold_db),
+                safety_margin_ms=str(safety_margin_ms),
+                g2p_preroll_ms=str(g2p_preroll_ms),
+                boundary_zcr_weight=str(boundary_zcr_weight),
+                phoneme_align_mode=phoneme_align_mode,
+                phoneme_align_fallback_only=str(phoneme_align_fallback_only).lower(),
             )
     else:
         if stage_log:
@@ -134,27 +146,52 @@ def run_slice(
             onset_min_lead_silence_ms=onset_min_lead_silence_ms,
             min_slice_ms=min_slice_ms,
             onset_energy_threshold_db=onset_energy_threshold_db,
+            safety_margin_ms=safety_margin_ms,
+            g2p_preroll_ms=g2p_preroll_ms,
+            boundary_zcr_weight=boundary_zcr_weight,
+            phoneme_align_mode=phoneme_align_mode,
+            phoneme_align_fallback_only=phoneme_align_fallback_only,
+            phoneme_align_remote_url=phoneme_align_remote_url,
+            phoneme_align_remote_timeout_s=phoneme_align_remote_timeout_s,
         )
         if stage_log and isinstance(meta, dict):
             aligned = meta.get("aligned_boundary_count", 0)
+            valley = meta.get("valley_boundary_count", 0)
             fallback = meta.get("fallback_boundary_count", 0)
+            phoneme_applied = meta.get("phoneme_align_applied_count", 0)
+            phoneme_remote_skipped = meta.get("phoneme_align_skipped_remote_count", 0)
             stage_log.info(
                 "LRC boundaries "
                 f"mode={meta.get('boundary_mode', boundary_mode)} "
-                f"aligned={aligned} fallback={fallback} "
+                f"aligned={aligned} valley={valley} fallback={fallback} "
                 f"search_margin_ms={meta.get('search_margin_ms', search_margin_ms)} "
                 f"onset_min_lead_silence_ms={meta.get('onset_min_lead_silence_ms', onset_min_lead_silence_ms)} "
                 f"min_slice_ms={meta.get('min_slice_ms', min_slice_ms)} "
-                f"onset_energy_threshold_db={meta.get('onset_energy_threshold_db', onset_energy_threshold_db)}"
+                f"onset_energy_threshold_db={meta.get('onset_energy_threshold_db', onset_energy_threshold_db)} "
+                f"safety_margin_ms={meta.get('safety_margin_ms', safety_margin_ms)} "
+                f"g2p_preroll_ms={meta.get('g2p_preroll_ms', g2p_preroll_ms)} "
+                f"boundary_zcr_weight={meta.get('boundary_zcr_weight', boundary_zcr_weight)} "
+                f"phoneme_align_mode={meta.get('phoneme_align_mode', phoneme_align_mode)} "
+                f"phoneme_align_applied={phoneme_applied}"
             )
+            if phoneme_remote_skipped:
+                stage_log.info(
+                    f"WARN phoneme_align_mode=remote skipped {phoneme_remote_skipped} boundaries "
+                    "(remote_not_implemented)"
+                )
             for item in meta.get("boundary_diagnostics", []):
                 status = "aligned" if item.get("aligned") else "fallback"
                 delta = item.get("delta_ms", 0)
                 delta_text = f" delta={delta:.2f}ms" if float(delta) > 0.01 else ""
+                margin_applied = int(item.get("safety_margin_applied_ms", 0))
+                margin_text = f" margin={margin_applied}ms" if margin_applied > 0 else ""
+                g2p_used = float(item.get("g2p_preroll_ms_used", 0))
+                g2p_text = f" g2p={g2p_used:.0f}ms" if g2p_used > 0 else ""
+                phoneme_text = " phoneme=1" if item.get("phoneme_align_applied") else ""
                 stage_log.info(
                     f"[BOUNDARY] i={int(item['boundary_index']):02d} {item['next_slice_id']} "
                     f"{status} method={item['method']} reason={item['reason']} "
-                    f"t_cut={item['t_cut_ms']} lrc={item['next_lrc_ms']}{delta_text}"
+                    f"t_cut={item['t_cut_ms']} lrc={item['next_lrc_ms']}{delta_text}{margin_text}{g2p_text}{phoneme_text}"
                 )
             example = meta.get("first_fallback_example")
             if example:

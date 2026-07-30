@@ -58,7 +58,28 @@ def test_schema_lrc_only_filter(api_workspace) -> None:
         "onset_min_lead_silence_ms",
         "min_slice_ms",
         "onset_energy_threshold_db",
+        "safety_margin_ms",
+        "g2p_preroll_ms",
+        "boundary_zcr_weight",
+        "phoneme_align_mode",
+        "phoneme_align_fallback_only",
+        "phoneme_align_remote_url",
+        "phoneme_align_remote_timeout_s",
     }
+
+
+def test_schema_merge_splice_params(api_workspace) -> None:
+    client = TestClient(api_workspace.app)
+    resp = client.get("/api/params/schema", params={"stage": "merge"})
+    keys = {p["key"] for p in resp.json()["params"]}
+    for key in (
+        "boundary_crossfade_ms",
+        "boundary_crossfade_curve",
+        "boundary_zero_crossing",
+        "boundary_lufs_match_ms",
+        "splice_wsola_search_ms",
+    ):
+        assert key in keys
 
 
 def test_schema_repeated_requests_hit_lru_cache(api_workspace, monkeypatch) -> None:

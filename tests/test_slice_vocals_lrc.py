@@ -53,6 +53,24 @@ def _synthetic_onset_audio(
     return audio
 
 
+def _synthetic_tail_blip_audio(
+    sr: int,
+    duration_ms: float,
+    *,
+    sing_end_ms: float,
+    blip_start_ms: float,
+    blip_level: float = 0.05,
+    sing_level: float = 0.5,
+    silence_level: float = 0.0003,
+) -> np.ndarray:
+    total = int(sr * duration_ms / 1000)
+    audio = np.full(total, silence_level, dtype=np.float32)
+    audio[: int(sr * sing_end_ms / 1000)] = sing_level
+    blip_end = min(int(sr * (blip_start_ms + 50) / 1000), total)
+    audio[int(sr * blip_start_ms / 1000) : blip_end] = blip_level
+    return audio
+
+
 @pytest.fixture
 def lrc_mod():
     return _load_slice_vocals_lrc()
@@ -97,7 +115,7 @@ def test_onset_detected_at_minus_300ms(tmp_path: Path, lrc_mod) -> None:
     onset_ms = next_lrc - 300.0
     audio = _synthetic_onset_audio(sr, 25000, onset_ms)
 
-    result = lrc_mod.detect_boundary(
+    result, _ = lrc_mod.detect_boundary(
         audio,
         sr,
         line_start_ms=10000.0,
@@ -125,7 +143,7 @@ def test_dual_onset_picks_rightmost_candidate(lrc_mod) -> None:
     audio[early_start:early_end] = 0.5
     audio[int(sr * late_onset / 1000) :] = 0.5
 
-    result = lrc_mod.detect_boundary(
+    result, _ = lrc_mod.detect_boundary(
         audio,
         sr,
         line_start_ms=10000.0,
@@ -140,11 +158,11 @@ def test_dual_onset_picks_rightmost_candidate(lrc_mod) -> None:
 def test_short_slice_triggers_fallback(lrc_mod) -> None:
     sr = 44100
     next_lrc = 6000.0
-    # Onset at 5920 with quiet lead; next line ends at 6400 -> only 480ms after cut.
-    audio = np.full(int(sr * 12), 0.001, dtype=np.float32)
+    # Continuous energy until onset; next line ends at 6400 -> only 480ms after cut at 5920.
+    audio = np.full(int(sr * 12), 0.08, dtype=np.float32)
     audio[int(sr * 5920 / 1000) :] = 0.5
 
-    result = lrc_mod.detect_boundary(
+    result, _ = lrc_mod.detect_boundary(
         audio,
         sr,
         line_start_ms=5000.0,
@@ -157,7 +175,8 @@ def test_short_slice_triggers_fallback(lrc_mod) -> None:
 
     assert result.fallback
     assert result.t_cut == next_lrc
-    assert result.reason == "next_slice_too_short"
+    assert "next_slice_too_short" in result.reason
+    assert "safety_margin_skipped" in result.reason
 
 
 def test_manifest_contains_lrc_fields(tmp_path: Path, lrc_mod) -> None:
@@ -243,7 +262,7 @@ def test_legato_fallback_on_continuous_rise(lrc_mod) -> None:
         audio[sample] = 0.08 + 0.35 * progress
     audio[rise_end:] = 0.45
 
-    result = lrc_mod.detect_boundary(
+    result, _ = lrc_mod.detect_boundary(
         audio,
         sr,
         line_start_ms=10000.0,
@@ -366,7 +385,7 @@ def test_merge_timeline_continuous_after_onset_align(tmp_path: Path, lrc_mod) ->
         dst.write_bytes(src.read_bytes())
 
     profile = merge_mod.PROFILES["balanced"]
-    timeline = merge_mod.build_from_slices(
+    timeline, _ = merge_mod.build_from_slices(
         manifest_path,
         converted_dir,
         slices_dir,
@@ -379,6 +398,335 @@ def test_merge_timeline_continuous_after_onset_align(tmp_path: Path, lrc_mod) ->
     for idx in range(len(starts) - 1):
         assert ends[idx] == starts[idx + 1]
     assert timeline.shape[0] > 0
+
+
+def test_valley_cuts_before_tail_blip(lrc_mod) -> None:
+    sr = 44100
+    next_lrc = 2680.0
+    audio = _synthetic_tail_blip_audio(
+        sr,
+        duration_ms=3000,
+        sing_end_ms=1800,
+        blip_start_ms=2600,
+    )
+
+    result, _ = lrc_mod.detect_boundary(
+        audio,
+        sr,
+        line_start_ms=0.0,
+        next_lrc_ts=next_lrc,
+        next_line_end_ms=5000.0,
+        search_margin_ms=400,
+        min_slice_ms=500,
+    )
+
+    assert not result.fallback
+    assert result.method == "valley_onset"
+    assert result.reason == "aligned_valley"
+    assert result.t_cut < 2600.0
+    assert result.t_cut >= 1800.0
+
+
+def test_valley_searches_latter_half_only(lrc_mod) -> None:
+    sr = 44100
+    next_lrc = 15000.0
+    line_start = 10000.0
+    search_margin = 400
+    window_start = max(line_start + 500, next_lrc - search_margin)
+    valley_window_start = window_start + (next_lrc - window_start) * 0.5
+
+    audio = np.full(int(sr * 20), 0.001, dtype=np.float32)
+    audio[: int(sr * 14600 / 1000)] = 0.5
+    audio[int(sr * 14600 / 1000) : int(sr * valley_window_start / 1000)] = 0.0005
+    audio[int(sr * valley_window_start / 1000) : int(sr * 14900 / 1000)] = 0.002
+    audio[int(sr * 14950 / 1000) : int(sr * 15000 / 1000)] = 0.5
+
+    result, _ = lrc_mod.detect_boundary(
+        audio,
+        sr,
+        line_start_ms=line_start,
+        next_lrc_ts=next_lrc,
+        next_line_end_ms=20000.0,
+        search_margin_ms=search_margin,
+        min_slice_ms=500,
+    )
+
+    assert not result.fallback
+    assert result.method == "valley_onset"
+    assert result.t_cut >= valley_window_start
+
+
+def test_valley_fails_falls_to_onset(lrc_mod) -> None:
+    sr = 44100
+    onset_ms = 14700.0
+    audio = _synthetic_onset_audio(sr, 20000, onset_ms)
+
+    result, _ = lrc_mod.detect_boundary(
+        audio,
+        sr,
+        line_start_ms=10000.0,
+        next_lrc_ts=15000.0,
+        next_line_end_ms=20000.0,
+        search_margin_ms=400,
+        onset_min_lead_silence_ms=80,
+        min_slice_ms=500,
+    )
+
+    assert not result.fallback
+    assert result.method == "silence_onset"
+    assert abs(result.t_cut - onset_ms) <= 20
+
+
+def test_fallback_applies_safety_margin(lrc_mod) -> None:
+    sr = 44100
+    next_lrc = 15000.0
+    audio = np.zeros(int(sr * 20), dtype=np.float32)
+
+    result, _ = lrc_mod.detect_boundary(
+        audio,
+        sr,
+        line_start_ms=10000.0,
+        next_lrc_ts=next_lrc,
+        next_line_end_ms=20000.0,
+        safety_margin_ms=80,
+        min_slice_ms=500,
+    )
+
+    assert result.fallback
+    assert result.method == "lrc_fallback_margin"
+    assert result.t_cut == next_lrc - 80
+    assert result.safety_margin_applied_ms == 80
+    assert result.reason == "silent_window"
+
+
+def test_safety_margin_skipped_when_too_short(lrc_mod) -> None:
+    sr = 44100
+    next_lrc = 6000.0
+    audio = np.full(int(sr * 12), 0.08, dtype=np.float32)
+
+    result, _ = lrc_mod.detect_boundary(
+        audio,
+        sr,
+        line_start_ms=5000.0,
+        next_lrc_ts=next_lrc,
+        next_line_end_ms=6400.0,
+        safety_margin_ms=80,
+        min_slice_ms=500,
+    )
+
+    assert result.fallback
+    assert result.t_cut == next_lrc
+    assert "safety_margin_skipped" in result.reason
+    assert result.safety_margin_applied_ms == 0
+
+
+def test_safety_margin_zero_disables(lrc_mod) -> None:
+    sr = 44100
+    next_lrc = 15000.0
+    audio = np.zeros(int(sr * 20), dtype=np.float32)
+
+    result, _ = lrc_mod.detect_boundary(
+        audio,
+        sr,
+        line_start_ms=10000.0,
+        next_lrc_ts=next_lrc,
+        next_line_end_ms=20000.0,
+        safety_margin_ms=0,
+        min_slice_ms=500,
+    )
+
+    assert result.fallback
+    assert result.method == "lrc_fallback"
+    assert result.t_cut == next_lrc
+    assert result.safety_margin_applied_ms == 0
+
+
+def test_lrc_strict_unchanged_with_tail_blip(tmp_path: Path, lrc_mod) -> None:
+    lrc_path = tmp_path / "song.lrc"
+    vocals_path = tmp_path / "vocals.wav"
+    out_dir = tmp_path / "slices"
+
+    _write_lrc(
+        lrc_path,
+        [
+            ("00:00.00", "line one"),
+            ("00:02.68", "line two"),
+        ],
+    )
+    audio = _synthetic_tail_blip_audio(
+        44100,
+        duration_ms=5000,
+        sing_end_ms=1800,
+        blip_start_ms=2600,
+    )
+    _write_wav(vocals_path, audio)
+
+    _, _, manifest = lrc_mod.slice_vocals_lrc(
+        lrc_path,
+        vocals_path,
+        out_dir,
+        boundary_mode="lrc_strict",
+        safety_margin_ms=80,
+    )
+
+    assert manifest["slices"][0]["end_ms"] == 2680
+    assert manifest["slices"][1]["start_ms"] == 2680
+
+
+def test_manifest_contains_valley_fields(tmp_path: Path, lrc_mod) -> None:
+    lrc_path = tmp_path / "song.lrc"
+    vocals_path = tmp_path / "vocals.wav"
+    out_dir = tmp_path / "slices"
+
+    _write_lrc(
+        lrc_path,
+        [
+            ("00:00.00", "line one"),
+            ("00:02.68", "line two"),
+        ],
+    )
+    audio = _synthetic_tail_blip_audio(
+        44100,
+        duration_ms=5000,
+        sing_end_ms=1800,
+        blip_start_ms=2600,
+    )
+    _write_wav(vocals_path, audio)
+
+    _, _, manifest = lrc_mod.slice_vocals_lrc(lrc_path, vocals_path, out_dir)
+
+    assert manifest["safety_margin_ms"] == 80
+    assert "valley_boundary_count" in manifest
+    assert manifest["valley_boundary_count"] >= 1
+    diag = manifest["boundary_diagnostics"][0]
+    assert "safety_margin_applied_ms" in diag
+
+
+def test_g2p_extends_window_for_sibilant(lrc_mod) -> None:
+    sr = 44100
+    next_lrc = 15000.0
+    onset_ms = next_lrc - 80.0
+    audio = _synthetic_onset_audio(sr, 25000, onset_ms, pre_level=0.001, post_level=0.5)
+
+    result_off, g2p_off = lrc_mod.detect_boundary(
+        audio,
+        sr,
+        line_start_ms=10000.0,
+        next_lrc_ts=next_lrc,
+        next_line_end_ms=20000.0,
+        next_line_text="思君",
+        g2p_preroll_ms=0,
+        search_margin_ms=50,
+        onset_min_lead_silence_ms=80,
+    )
+    result_on, g2p_on = lrc_mod.detect_boundary(
+        audio,
+        sr,
+        line_start_ms=10000.0,
+        next_lrc_ts=next_lrc,
+        next_line_end_ms=20000.0,
+        next_line_text="思君",
+        g2p_preroll_ms=100,
+        search_margin_ms=50,
+        onset_min_lead_silence_ms=80,
+    )
+
+    assert g2p_off == 0.0
+    assert g2p_on == 100.0
+    assert abs(result_on.t_cut - onset_ms) <= 25
+    assert result_on.t_cut < result_off.t_cut - 10
+
+
+def test_g2p_disabled_when_zero(lrc_mod) -> None:
+    sr = 44100
+    next_lrc = 15000.0
+    audio = _synthetic_onset_audio(sr, 25000, next_lrc - 300.0)
+
+    result_a, g2p_a = lrc_mod.detect_boundary(
+        audio,
+        sr,
+        line_start_ms=10000.0,
+        next_lrc_ts=next_lrc,
+        next_line_end_ms=20000.0,
+        next_line_text="思",
+        g2p_preroll_ms=0,
+    )
+    result_b, g2p_b = lrc_mod.detect_boundary(
+        audio,
+        sr,
+        line_start_ms=10000.0,
+        next_lrc_ts=next_lrc,
+        next_line_end_ms=20000.0,
+        g2p_preroll_ms=0,
+    )
+
+    assert g2p_a == 0.0
+    assert g2p_b == 0.0
+    assert result_a.t_cut == result_b.t_cut
+
+
+def test_zcr_valley_prefers_silence_gap(lrc_mod) -> None:
+    sr = 44100
+    next_lrc = 15000.0
+    window_start = next_lrc - 400
+    total = int(sr * 25)
+    audio = np.full(total, 0.04, dtype=np.float32)
+    gap_center = next_lrc - 280
+    gap_start = int(sr * (gap_center - 30) / 1000)
+    gap_end = int(sr * (gap_center + 30) / 1000)
+    audio[gap_start:gap_end] = 0.0005
+    valley_rms = int(sr * (next_lrc - 120) / 1000)
+    audio[valley_rms : valley_rms + int(sr * 0.05)] = 0.015
+
+    result_plain, _ = lrc_mod.detect_boundary(
+        audio,
+        sr,
+        line_start_ms=10000.0,
+        next_lrc_ts=next_lrc,
+        next_line_end_ms=20000.0,
+        boundary_zcr_weight=0.0,
+        search_margin_ms=400,
+    )
+    result_zcr, _ = lrc_mod.detect_boundary(
+        audio,
+        sr,
+        line_start_ms=10000.0,
+        next_lrc_ts=next_lrc,
+        next_line_end_ms=20000.0,
+        boundary_zcr_weight=0.25,
+        search_margin_ms=400,
+    )
+
+    assert not result_plain.fallback
+    assert not result_zcr.fallback
+    assert result_zcr.t_cut <= result_plain.t_cut
+
+
+@pytest.mark.integration
+def test_remote_phoneme_align_skipped_in_manifest(tmp_path: Path, lrc_mod) -> None:
+    lrc_path = tmp_path / "song.lrc"
+    vocals_path = tmp_path / "vocals.wav"
+    out_dir = tmp_path / "slices"
+
+    _write_lrc(
+        lrc_path,
+        [
+            ("00:10.00", "line one"),
+            ("00:15.00", "line two"),
+        ],
+    )
+    _write_wav(vocals_path, np.zeros(int(44100 * 20), dtype=np.float32))
+
+    _, _, manifest = lrc_mod.slice_vocals_lrc(
+        lrc_path,
+        vocals_path,
+        out_dir,
+        phoneme_align_mode="remote",
+        phoneme_align_remote_url="http://example.com/align",
+    )
+
+    assert manifest["phoneme_align_mode"] == "remote"
+    assert manifest["phoneme_align_skipped_remote_count"] >= 1
 
 
 @pytest.mark.integration

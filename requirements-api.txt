@@ -5,3 +5,5 @@ anyio
 httpx
 pytest
 pytest-asyncio
+# P2 optional: local CPU phoneme alignment (downloads MMS model on first use)
+ctc-forced-aligner>=1.0.2

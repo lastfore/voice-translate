@@ -320,6 +320,15 @@ class StageRunner:
                 onset_min_lead_silence_ms=int(params.get("onset_min_lead_silence_ms", 80)),
                 min_slice_ms=int(params.get("min_slice_ms", 500)),
                 onset_energy_threshold_db=float(params.get("onset_energy_threshold_db", -40.0)),
+                safety_margin_ms=int(params.get("safety_margin_ms", 80)),
+                g2p_preroll_ms=int(params.get("g2p_preroll_ms", 0)),
+                boundary_zcr_weight=float(params.get("boundary_zcr_weight", 0.0)),
+                phoneme_align_mode=str(params.get("phoneme_align_mode", "off")),
+                phoneme_align_fallback_only=bool(params.get("phoneme_align_fallback_only", True)),
+                phoneme_align_remote_url=str(params.get("phoneme_align_remote_url", "")),
+                phoneme_align_remote_timeout_s=int(
+                    params.get("phoneme_align_remote_timeout_s", 30)
+                ),
                 on_progress=on_progress,
                 stage_log=stage_log,
             )
@@ -349,6 +358,13 @@ class StageRunner:
                             "onset_min_lead_silence_ms",
                             "min_slice_ms",
                             "onset_energy_threshold_db",
+                            "safety_margin_ms",
+                            "g2p_preroll_ms",
+                            "boundary_zcr_weight",
+                            "phoneme_align_mode",
+                            "phoneme_align_fallback_only",
+                            "phoneme_align_remote_url",
+                            "phoneme_align_remote_timeout_s",
                         )
                         if k in params
                     },
@@ -444,6 +460,13 @@ class StageRunner:
                     params.get("instrumental_gain_db", params.get("instrumental_gain", 0.0))
                 ),
                 skip_mastering=bool(params.get("skip_mastering", False)),
+                boundary_crossfade_ms=int(params.get("boundary_crossfade_ms", 0)),
+                boundary_crossfade_curve=str(
+                    params.get("boundary_crossfade_curve", "equal_power")
+                ),
+                boundary_zero_crossing=bool(params.get("boundary_zero_crossing", True)),
+                boundary_lufs_match_ms=int(params.get("boundary_lufs_match_ms", 0)),
+                splice_wsola_search_ms=int(params.get("splice_wsola_search_ms", 0)),
                 on_progress=on_progress,
                 stage_log=stage_log,
             )
@@ -470,6 +493,11 @@ class StageRunner:
                             "instrumental_gain_db",
                             "clean_instrumental",
                             "skip_mastering",
+                            "boundary_crossfade_ms",
+                            "boundary_crossfade_curve",
+                            "boundary_zero_crossing",
+                            "boundary_lufs_match_ms",
+                            "splice_wsola_search_ms",
                         )
                         if k in params
                     },
