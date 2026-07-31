@@ -11,7 +11,7 @@
  *   - api/routers/filesystem.py `browse()`
  */
 
-export type StageName = 'separate' | 'slice' | 'convert' | 'merge'
+export type StageName = 'separate' | 'deharmonize' | 'slice' | 'convert' | 'merge'
 
 export type StageStatus = 'not_run' | 'running' | 'done' | 'failed' | 'skipped'
 
@@ -70,6 +70,8 @@ export type StageParamsByStage = Record<StageName, StageParamValues>
 export interface ProjectArtifacts {
   sep_vocals: string | null
   sep_instrumental: string | null
+  deharm_lead: string | null
+  deharm_backing: string | null
   convert_full_track: string | null
   convert_dir: string | null
   mixed: string | null

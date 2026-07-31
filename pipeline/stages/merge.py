@@ -49,6 +49,9 @@ def run_merge(
     clean_instrumental: bool = False,
     vocals_gain_db: float = 0.0,
     instrumental_gain_db: float = 0.0,
+    backing_vocals: Path | None = None,
+    backing_gain_db: float = 0.0,
+    include_backing: bool = True,
     skip_mastering: bool = False,
     boundary_crossfade_ms: int = 0,
     boundary_crossfade_curve: str = "equal_power",
@@ -95,6 +98,9 @@ def run_merge(
             boundary_zero_crossing=str(boundary_zero_crossing).lower(),
             boundary_lufs_match_ms=str(boundary_lufs_match_ms),
             splice_wsola_search_ms=str(splice_wsola_search_ms),
+            backing_vocals=str(backing_vocals) if backing_vocals else "",
+            backing_gain_db=str(backing_gain_db),
+            include_backing=str(include_backing).lower(),
         )
 
     _emit(f"Merging with profile={profile}", 5.0)
@@ -125,6 +131,9 @@ def run_merge(
         clean_instrumental_flag=clean_instrumental,
         vocals_gain_db=vocals_gain_db,
         instrumental_gain_db=instrumental_gain_db,
+        backing_vocals=backing_vocals.resolve() if backing_vocals else None,
+        backing_gain_db=backing_gain_db,
+        include_backing=include_backing,
         skip_mastering=skip_mastering,
         on_line=_karaoke_line,
         splice=splice,

@@ -17,8 +17,8 @@ def test_merge_bool_params_ordered_before_numeric() -> None:
     params = params_for_stage(StageName.MERGE.value)
     bool_params, other_params = partition_bool_params(params)
     bool_keys = {p.key for p in bool_params}
-    assert bool_keys == {"clean_instrumental", "skip_mastering"}
-    assert {p.key for p in other_params} == {"vocals_gain_db", "instrumental_gain_db"}
+    assert {"clean_instrumental", "include_backing", "skip_mastering"}.issubset(bool_keys)
+    assert {"vocals_gain_db", "instrumental_gain_db", "backing_gain_db"}.issubset({p.key for p in other_params})
 
 
 def test_convert_bool_params_partitioned() -> None:

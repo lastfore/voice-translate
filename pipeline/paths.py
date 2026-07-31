@@ -11,6 +11,8 @@ from typing import Literal
 DeleteScope = Literal["metadata", "artifacts", "all"]
 
 _VOCALS_STEM_RE = re.compile(r"^(.+?)_\(Vocals\)_", re.IGNORECASE)
+_LEAD_STEM_RE = re.compile(r"^(.+?)_\(Lead\)_", re.IGNORECASE)
+_BACKING_STEM_RE = re.compile(r"^(.+?)_\(Backing\)_", re.IGNORECASE)
 _INSTRUMENTAL_STEM_RE = re.compile(r"^(.+?)_\((?:other|instrumental)\)_(.+)$", re.IGNORECASE)
 
 
@@ -84,6 +86,56 @@ def separated_vocals_path(project_id: str) -> Path | None:
         if project_id.lower() in name_lower and "vocal" in name_lower and "instrumental" not in name_lower:
             return path
     return None
+
+
+def separated_lead_vocals_path(project_id: str) -> Path | None:
+    """Glob match ``{id}_(Lead)_*.flac`` from deharmonize stage."""
+    base = separated_dir()
+    if not base.is_dir():
+        return None
+    for pattern in (
+        f"{project_id}_(Lead)_*.flac",
+        f"{project_id}_(lead)_*.flac",
+    ):
+        hit = _glob_first(base, pattern)
+        if hit:
+            return hit
+    for path in sorted(base.glob("*.flac")):
+        name_lower = path.name.lower()
+        if project_id.lower() in name_lower and "(lead)" in name_lower:
+            return path
+    return None
+
+
+def separated_backing_vocals_path(project_id: str) -> Path | None:
+    """Glob match ``{id}_(Backing)_*.flac`` from deharmonize stage."""
+    base = separated_dir()
+    if not base.is_dir():
+        return None
+    for pattern in (
+        f"{project_id}_(Backing)_*.flac",
+        f"{project_id}_(backing)_*.flac",
+    ):
+        hit = _glob_first(base, pattern)
+        if hit:
+            return hit
+    for path in sorted(base.glob("*.flac")):
+        name_lower = path.name.lower()
+        if project_id.lower() in name_lower and "(backing)" in name_lower:
+            return path
+    return None
+
+
+def deharmonize_meta_path(project_id: str) -> Path:
+    return separated_dir() / f"{project_id}_deharmonize_meta.json"
+
+
+def has_deharmonize_artifacts(project_id: str) -> bool:
+    """True when lead and backing stems exist on disk."""
+    return (
+        separated_lead_vocals_path(project_id) is not None
+        and separated_backing_vocals_path(project_id) is not None
+    )
 
 
 def separated_instrumental_path(project_id: str) -> Path | None:

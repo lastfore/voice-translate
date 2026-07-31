@@ -26,7 +26,7 @@ import { STAGE_LABELS, stageStatusIcon } from '@/lib/format'
 import { ApiError } from '@/lib/api'
 import type { ProjectSummary, StageName } from '@/types/pipeline'
 
-const STAGE_ORDER: StageName[] = ['separate', 'slice', 'convert', 'merge']
+const STAGE_ORDER: StageName[] = ['separate', 'deharmonize', 'slice', 'convert', 'merge']
 
 interface ProjectRowProps {
   project: ProjectSummary

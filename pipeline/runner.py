@@ -12,6 +12,7 @@ from typing import Any
 from pipeline import paths
 from pipeline.models import (
     ConvertMode,
+    DEFAULT_PIPELINE_STAGES,
     Job,
     JobStatus,
     PipelineResult,
@@ -32,6 +33,7 @@ from pipeline.stage_log import (
 )
 from pipeline.stage_params import params_for_stage
 from pipeline.stages.convert import run_convert
+from pipeline.stages.deharmonize import run_deharmonize
 from pipeline.stages.merge import run_merge
 from pipeline.stages.separate import run_separate
 from pipeline.stages.slice import run_slice
@@ -50,6 +52,7 @@ _RESOLVED_INPUT_KEYS = frozenset({
     "source_vocals",
     "instrumental",
     "original_vocals",
+    "backing_vocals",
     "slice_mode",
     "active_slice_mode",
 })
@@ -199,7 +202,7 @@ class StageRunner:
         on_progress: Callable[[ProgressEvent], None] | None = None,
         **params: Any,
     ) -> PipelineResult:
-        chain = stages or list(StageName)
+        chain = stages or DEFAULT_PIPELINE_STAGES
         resolved_slice_mode = SliceMode(
             self.store.resolve_pipeline_slice_mode(project_id, slice_mode)
         )
@@ -291,6 +294,39 @@ class StageRunner:
                     "instrumental": rel_path(result.instrumental, root),
                 },
                 "params": {"model": params.get("model", "mel_band_roformer_kim_ft_unwa.ckpt")},
+            }
+
+        if stage == StageName.DEHARMONIZE:
+            vocals = _abs("vocals")
+            assert vocals is not None
+            from pipeline.stages.deharmonize import DEFAULT_KARAOKE_MODEL
+
+            result = run_deharmonize(
+                project_id,
+                vocals,
+                model=params.get("model", DEFAULT_KARAOKE_MODEL),
+                segment_size=int(params.get("segment_size", 256)),
+                overlap=int(params.get("overlap", 8)),
+                invert_spect=bool(params.get("invert_spect", True)),
+                skip_backing_ratio_threshold=float(params.get("skip_backing_ratio_threshold", 0.10)),
+                force=bool(params.get("force", False)),
+                on_progress=on_progress,
+                stage_log=stage_log,
+            )
+            artifacts: dict[str, Any] = {"meta": rel_path(result.meta_path, root)}
+            if result.lead_vocals and result.backing_vocals:
+                artifacts["lead_vocals"] = rel_path(result.lead_vocals, root)
+                artifacts["backing_vocals"] = rel_path(result.backing_vocals, root)
+            dh_param_keys = [p.key for p in params_for_stage(StageName.DEHARMONIZE.value)]
+            return {
+                "artifacts": artifacts,
+                "params": {
+                    "skipped": result.skipped,
+                    "skip_reason": result.skip_reason,
+                    "backing_ratio": result.backing_ratio,
+                    **{k: params[k] for k in dh_param_keys if k in params},
+                },
+                "_stage_status_override": StageStatus.SKIPPED if result.skipped else None,
             }
 
         if stage == StageName.SLICE:
@@ -459,6 +495,9 @@ class StageRunner:
                 instrumental_gain_db=float(
                     params.get("instrumental_gain_db", params.get("instrumental_gain", 0.0))
                 ),
+                backing_vocals=_abs("backing_vocals"),
+                backing_gain_db=float(params.get("backing_gain_db", 0.0)),
+                include_backing=bool(params.get("include_backing", True)),
                 skip_mastering=bool(params.get("skip_mastering", False)),
                 boundary_crossfade_ms=int(params.get("boundary_crossfade_ms", 0)),
                 boundary_crossfade_curve=str(
@@ -491,6 +530,8 @@ class StageRunner:
                         for k in (
                             "vocals_gain_db",
                             "instrumental_gain_db",
+                            "backing_gain_db",
+                            "include_backing",
                             "clean_instrumental",
                             "skip_mastering",
                             "boundary_crossfade_ms",
@@ -530,10 +571,12 @@ class StageRunner:
         for key in _RESOLVED_INPUT_KEYS:
             if key in inputs:
                 stage_params[key] = inputs[key]
+        status_override = payload.get("_stage_status_override")
+        final_status = status_override if status_override is not None else StageStatus.DONE
         self.store.update_stage(
             project_id,
             stage,
-            status=StageStatus.DONE,
+            status=final_status,
             params=stage_params,
             artifacts=artifacts,
             error=None,

@@ -100,7 +100,7 @@ def test_defaults_returns_key_fields(api_workspace, sample_audio: Path) -> None:
     body = resp.json()
     for key in ("stage_status", "stage_params", "wizard_params", "artifacts", "slice_mode", "convert_mode"):
         assert key in body
-    assert set(body["stage_status"].keys()) == {"separate", "slice", "convert", "merge"}
+    assert set(body["stage_status"].keys()) == {"separate", "deharmonize", "slice", "convert", "merge"}
     assert body["stage_status"]["separate"] == "not_run"
 
 

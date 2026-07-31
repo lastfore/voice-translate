@@ -16,9 +16,26 @@ MAX_JOB_HISTORY = 20
 
 class StageName(str, Enum):
     SEPARATE = "separate"
+    DEHARMONIZE = "deharmonize"
     SLICE = "slice"
     CONVERT = "convert"
     MERGE = "merge"
+
+
+DEFAULT_PIPELINE_STAGES: list[StageName] = [
+    StageName.SEPARATE,
+    StageName.SLICE,
+    StageName.CONVERT,
+    StageName.MERGE,
+]
+
+
+DEFAULT_PIPELINE_STAGES: tuple[StageName, ...] = (
+    StageName.SEPARATE,
+    StageName.SLICE,
+    StageName.CONVERT,
+    StageName.MERGE,
+)
 
 
 class StageStatus(str, Enum):

@@ -61,8 +61,20 @@ function MergePageInner({ projectId, initialMode }: { projectId: string; initial
       .catch(() => setManifestPreview(''))
   }, [projectId, defaults?.active_slice_mode, stageRun.status])
 
+  const hasBacking = Boolean(defaults?.artifacts.deharm_backing)
+
+  const mergeParams = useMemo(() => {
+    if (!schema) return []
+    if (!hasBacking) return schema.params
+    return schema.params.filter((p) => p.key !== 'clean_instrumental')
+  }, [schema, hasBacking])
+
   const handleSubmit = (values: StageParamValues) => {
     const params: StageParamValues = { ...values, merge_mode: mode }
+    if (hasBacking) {
+      params.clean_instrumental = false
+      params.include_backing = values.include_backing ?? true
+    }
     if (mode === MERGE_WHOLE) {
       if (vocalsOverride.trim()) params.vocals = vocalsOverride.trim()
     } else {
@@ -133,12 +145,17 @@ function MergePageInner({ projectId, initialMode }: { projectId: string; initial
                 defaults?.merge_reference ? `当前默认：${defaults.merge_reference}` : '使用项目输入作为默认参考'
               }
             />
+            {hasBacking && (
+              <p className="text-sm text-amber-700 dark:text-amber-400" data-testid="merge-three-stem-hint">
+                检测到和声轨 — 三轨 merge 模式；Karaoke 净化伴奏已禁用。
+              </p>
+            )}
             {schemaLoading || !schema ? (
               <Skeleton className="h-32 w-full" />
             ) : (
               <StageParamForm
-                key={`${projectId}-${mode}`}
-                params={schema.params}
+                key={`${projectId}-${mode}-${hasBacking ? '3stem' : '2stem'}`}
+                params={mergeParams}
                 defaultValues={defaults?.stage_params.merge ?? {}}
                 onSubmit={handleSubmit}
                 submitLabel="运行合并"
@@ -167,6 +184,12 @@ function MergePageInner({ projectId, initialMode }: { projectId: string; initial
                 <p className="text-sm font-medium">切片清单</p>
                 <Textarea value={manifestPreview} readOnly rows={6} data-testid="merge-manifest-preview" />
               </div>
+            )}
+            {hasBacking && (
+              <ArtifactAudio
+                label="和声轨 (backing_vocals)"
+                src={defaults?.artifacts.deharm_backing ?? null}
+              />
             )}
             <ArtifactAudio
               label="合并结果 (mixed)"

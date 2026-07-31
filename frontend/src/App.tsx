@@ -2,6 +2,7 @@ import { AppSidebar } from '@/components/layout/AppSidebar'
 import { ProjectHeader } from '@/components/projects/ProjectHeader'
 import { BatchQueuePage } from '@/pages/BatchQueuePage'
 import { ConvertPage } from '@/pages/ConvertPage'
+import { DeharmonizePage } from '@/pages/DeharmonizePage'
 import { MergePage } from '@/pages/MergePage'
 import { SeparatePage } from '@/pages/SeparatePage'
 import { SlicePage } from '@/pages/SlicePage'
@@ -26,6 +27,9 @@ function AppShell() {
               <TabsTrigger value="separate" data-testid="tab-separate">
                 分离
               </TabsTrigger>
+              <TabsTrigger value="deharmonize" data-testid="tab-deharmonize">
+                和声剥离
+              </TabsTrigger>
               <TabsTrigger value="slice" data-testid="tab-slice">
                 切片
               </TabsTrigger>
@@ -44,6 +48,9 @@ function AppShell() {
             </TabsContent>
             <TabsContent value="separate" className="mt-4">
               <SeparatePage />
+            </TabsContent>
+            <TabsContent value="deharmonize" className="mt-4">
+              <DeharmonizePage />
             </TabsContent>
             <TabsContent value="slice" className="mt-4">
               <SlicePage />

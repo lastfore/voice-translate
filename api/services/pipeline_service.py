@@ -13,6 +13,7 @@ Differences from the Gradio-era ``webui/state.py``:
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 
@@ -191,6 +192,7 @@ def get_project_defaults(store: ProjectStore, project_id: str) -> dict[str, Any]
         raise ProjectNotFoundError(project_id) from exc
 
     sep = project.stages[StageName.SEPARATE]
+    dh = project.stages[StageName.DEHARMONIZE]
     sl = project.stages[StageName.SLICE]
     cv = project.stages[StageName.CONVERT]
     mg = project.stages[StageName.MERGE]
@@ -225,6 +227,20 @@ def get_project_defaults(store: ProjectStore, project_id: str) -> dict[str, Any]
     )
     merge_mode = mg.params.get("merge_mode", paths.MERGE_WHOLE_TRACK)
 
+    stage_params = {
+        name.value: load_saved_stage_params(store, project_id, name.value) for name in StageName
+    }
+    backing_ratio = dh.params.get("backing_ratio")
+    if (
+        backing_ratio
+        and isinstance(backing_ratio, (int, float))
+        and backing_ratio > 0
+        and stage_params["merge"].get("backing_gain_db") == 0.0
+        and "backing_gain_db" not in mg.params
+    ):
+        stage_params["merge"] = dict(stage_params["merge"])
+        stage_params["merge"]["backing_gain_db"] = round(20.0 * math.log10(1.0 / float(backing_ratio)), 1)
+
     return {
         "display_name": project.display_name,
         "input_audio": project.input_audio,
@@ -249,13 +265,13 @@ def get_project_defaults(store: ProjectStore, project_id: str) -> dict[str, Any]
         "merge_profile": mg.params.get("profile", "full"),
         "merge_mode": merge_mode,
         "stage_status": stage_status,
-        "stage_params": {
-            name.value: load_saved_stage_params(store, project_id, name.value) for name in StageName
-        },
+        "stage_params": stage_params,
         "wizard_params": load_wizard_params(store, project_id),
         "artifacts": {
             "sep_vocals": media_url_for(sep.artifacts.get("vocals")),
             "sep_instrumental": media_url_for(sep.artifacts.get("instrumental")),
+            "deharm_lead": media_url_for(dh.artifacts.get("lead_vocals")),
+            "deharm_backing": media_url_for(dh.artifacts.get("backing_vocals")),
             "convert_full_track": media_url_for(cv.artifacts.get("full_track")),
             "convert_dir": (
                 (cv.artifacts.get(active_slice_mode) or {}).get("converted_dir")

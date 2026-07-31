@@ -65,6 +65,9 @@ def pick_inputs(
     if stage_val == StageName.SEPARATE.value:
         if v := _rel("mix_audio"):
             mapping["mix_audio"] = v
+    elif stage_val == StageName.DEHARMONIZE.value:
+        if v := _rel("vocals"):
+            mapping["vocals"] = v
     elif stage_val == StageName.SLICE.value:
         if v := _rel("vocals"):
             mapping["vocals"] = v
@@ -92,6 +95,7 @@ def pick_inputs(
             "instrumental",
             "reference",
             "original_vocals",
+            "backing_vocals",
             "manifest",
             "slices_dir",
             "output_dir",
@@ -300,6 +304,16 @@ def pick_outputs(
     if stage_val == StageName.SEPARATE.value:
         mapping["vocals"] = artifacts.get("vocals")
         mapping["instrumental"] = artifacts.get("instrumental")
+    elif stage_val == StageName.DEHARMONIZE.value:
+        mapping["lead_vocals"] = artifacts.get("lead_vocals")
+        mapping["backing_vocals"] = artifacts.get("backing_vocals")
+        mapping["meta"] = artifacts.get("meta")
+        if "backing_ratio" in params:
+            extra["backing_ratio"] = params["backing_ratio"]
+        if params.get("skipped"):
+            extra["skipped"] = "true"
+            if params.get("skip_reason"):
+                extra["skip_reason"] = params["skip_reason"]
     elif stage_val == StageName.SLICE.value:
         mapping["slices_dir"] = artifacts.get("slices_dir")
         mapping["manifest"] = artifacts.get("manifest")

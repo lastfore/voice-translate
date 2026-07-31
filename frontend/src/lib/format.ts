@@ -8,12 +8,13 @@ import type { ProjectSummary, StageName, StageStatus } from '@/types/pipeline'
 
 export const STAGE_LABELS: Record<StageName, string> = {
   separate: '分离',
+  deharmonize: '和声剥离',
   slice: '切片',
   convert: '转换',
   merge: '合并',
 }
 
-const STAGE_ORDER: StageName[] = ['separate', 'slice', 'convert', 'merge']
+const STAGE_ORDER: StageName[] = ['separate', 'deharmonize', 'slice', 'convert', 'merge']
 
 export function stageStatusIcon(status: StageStatus | undefined): string {
   switch (status) {

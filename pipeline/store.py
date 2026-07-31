@@ -58,6 +58,11 @@ def _slices_dir_usable(value: str | Path | None, root: Path) -> bool:
     return _dir_has_audio(p)
 
 
+def _deharmonize_usable(project: Project) -> bool:
+    rec = project.stages[StageName.DEHARMONIZE]
+    return rec.status == StageStatus.DONE and not rec.params.get("skipped")
+
+
 class ProjectStore:
     """Project CRUD and state persistence."""
 
@@ -347,6 +352,26 @@ class ProjectStore:
             return paths.normalize_slice_mode(str(overrides["active_slice_mode"]))
         return None
 
+    def _resolve_lead_vocals(self, project_id: str, project: Project) -> str | None:
+        if not _deharmonize_usable(project):
+            return None
+        dh = project.stages[StageName.DEHARMONIZE]
+        art = dh.artifacts.get("lead_vocals")
+        if art and _path_exists(art, self.root):
+            return str(art)
+        lead = paths.separated_lead_vocals_path(project_id)
+        return rel_path(lead, self.root) if lead else None
+
+    def _resolve_backing_vocals(self, project_id: str, project: Project) -> str | None:
+        if not _deharmonize_usable(project):
+            return None
+        dh = project.stages[StageName.DEHARMONIZE]
+        art = dh.artifacts.get("backing_vocals")
+        if art and _path_exists(art, self.root):
+            return str(art)
+        backing = paths.separated_backing_vocals_path(project_id)
+        return rel_path(backing, self.root) if backing else None
+
     def _bootstrap_project(self, project_id: str) -> Project:
         now = utc_now_iso()
         audio = paths.input_audio_path(project_id)
@@ -390,6 +415,34 @@ class ProjectStore:
                 }.items()
                 if v
             }
+
+        lead = paths.separated_lead_vocals_path(pid)
+        backing = paths.separated_backing_vocals_path(pid)
+        meta = paths.deharmonize_meta_path(pid)
+        if lead and backing:
+            rec = project.stages[StageName.DEHARMONIZE]
+            if rec.status == StageStatus.NOT_RUN:
+                rec.status = StageStatus.DONE
+            rec.artifacts = {
+                "lead_vocals": rel_path(lead, self.root),
+                "backing_vocals": rel_path(backing, self.root),
+            }
+            if meta.is_file():
+                rec.artifacts["meta"] = rel_path(meta, self.root)
+        elif meta.is_file() and project.stages[StageName.DEHARMONIZE].status == StageStatus.NOT_RUN:
+            try:
+                meta_data = json.loads(meta.read_text(encoding="utf-8"))
+                rec = project.stages[StageName.DEHARMONIZE]
+                rec.status = StageStatus.SKIPPED if meta_data.get("skipped") else StageStatus.DONE
+                rec.artifacts = {"meta": rel_path(meta, self.root)}
+                rec.params = dict(meta_data.get("params") or {})
+                if meta_data.get("skipped"):
+                    rec.params["skipped"] = True
+                    rec.params["skip_reason"] = meta_data.get("skip_reason")
+                if meta_data.get("backing_ratio") is not None:
+                    rec.params["backing_ratio"] = meta_data.get("backing_ratio")
+            except (json.JSONDecodeError, OSError):
+                pass
 
         sdir = paths.slices_dir(pid)
         slice_mode_art: dict[str, dict[str, str]] = {}
@@ -523,6 +576,10 @@ class ProjectStore:
             if not _path_exists(inputs.get("mix_audio"), self.root):
                 errors.append("mix_audio: 混音文件路径不存在")
 
+        elif stage == StageName.DEHARMONIZE:
+            if not _path_exists(inputs.get("vocals"), self.root):
+                errors.append("vocals: 混合人声音轨路径不存在")
+
         elif stage == StageName.SLICE:
             if not _path_exists(inputs.get("vocals"), self.root):
                 errors.append("vocals: 人声音轨路径不存在")
@@ -592,7 +649,23 @@ class ProjectStore:
                 elif project.input_audio:
                     resolved["mix_audio"] = project.input_audio
 
+        elif stage == StageName.DEHARMONIZE:
+            if not resolved.get("vocals"):
+                art_vocals = record.artifacts.get("vocals") or project.stages[StageName.SEPARATE].artifacts.get(
+                    "vocals"
+                )
+                if art_vocals and _path_exists(art_vocals, self.root):
+                    resolved["vocals"] = art_vocals
+                else:
+                    vocals = paths.separated_vocals_path(pid)
+                    if vocals:
+                        resolved["vocals"] = rel_path(vocals, self.root)
+
         elif stage == StageName.SLICE:
+            if not resolved.get("vocals"):
+                lead = self._resolve_lead_vocals(pid, project)
+                if lead:
+                    resolved["vocals"] = lead
             if not resolved.get("vocals"):
                 art_vocals = record.artifacts.get("vocals") or project.stages[StageName.SEPARATE].artifacts.get(
                     "vocals"
@@ -631,6 +704,10 @@ class ProjectStore:
                 if ref:
                     resolved["reference"] = rel_path(ref, self.root)
             if mode == ConvertMode.FULL_TRACK.value:
+                if not resolved.get("source_vocals"):
+                    lead = self._resolve_lead_vocals(pid, project)
+                    if lead:
+                        resolved["source_vocals"] = lead
                 if not resolved.get("source_vocals"):
                     art = record.artifacts.get("full_track")
                     sep_vocals = project.stages[StageName.SEPARATE].artifacts.get("vocals")
@@ -776,6 +853,10 @@ class ProjectStore:
                 if saved_original and not _path_exists(saved_original, self.root):
                     resolved.pop("original_vocals", None)
                 if not resolved.get("original_vocals"):
+                    lead = self._resolve_lead_vocals(pid, project)
+                    if lead:
+                        resolved["original_vocals"] = lead
+                if not resolved.get("original_vocals"):
                     sep_vocals = project.stages[StageName.SEPARATE].artifacts.get("vocals")
                     if sep_vocals and _path_exists(sep_vocals, self.root):
                         resolved["original_vocals"] = sep_vocals
@@ -783,6 +864,15 @@ class ProjectStore:
                         vocals = paths.separated_vocals_path(pid)
                         if vocals:
                             resolved["original_vocals"] = rel_path(vocals, self.root)
+            include_backing = True
+            if overrides and "include_backing" in overrides:
+                include_backing = bool(overrides.get("include_backing"))
+            elif record.params.get("include_backing") is not None:
+                include_backing = bool(record.params.get("include_backing"))
+            if include_backing and not resolved.get("backing_vocals"):
+                backing = self._resolve_backing_vocals(pid, project)
+                if backing:
+                    resolved["backing_vocals"] = backing
             if merge_mode == "slice_stitch":
                 vocals_mode = paths.infer_slice_mode_from_slices_dir(resolved.get("vocals"), pid)
                 if vocals_mode:
@@ -820,6 +910,7 @@ class ProjectStore:
         project = self.get_project(project_id)
         has_input = bool(project.input_audio and _path_exists(project.input_audio, self.root))
         has_sep = bool(paths.separated_vocals_path(project_id))
+        has_deharm = paths.has_deharmonize_artifacts(project_id)
         has_slices = any(
             paths.resolve_slices_mode_dir(project_id, mode) for mode in paths.SLICE_MODES
         ) or (paths.slices_dir(project_id).is_dir() and _dir_has_audio(paths.slices_dir(project_id)))
@@ -835,8 +926,13 @@ class ProjectStore:
             return StageName.MERGE
         if has_slices:
             return StageName.CONVERT
-        if has_sep:
+        if has_deharm or project.stages[StageName.DEHARMONIZE].status in (
+            StageStatus.DONE,
+            StageStatus.SKIPPED,
+        ):
             return StageName.SLICE
+        if has_sep:
+            return StageName.DEHARMONIZE
         if has_input:
             return StageName.SEPARATE
         return None

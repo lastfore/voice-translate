@@ -757,24 +757,40 @@ def mix_tracks(
     instrumental: np.ndarray,
     vocals_gain_db: float,
     instrumental_gain_db: float,
+    backing: np.ndarray | None = None,
+    backing_gain_db: float = 0.0,
 ) -> np.ndarray:
     vocals = apply_gain_db(vocals, vocals_gain_db)
     instrumental = apply_gain_db(instrumental, instrumental_gain_db)
+    backing_mono: np.ndarray | None = None
+    if backing is not None:
+        backing_mono = apply_gain_db(to_mono(backing), backing_gain_db)
 
     inst = to_samples_channels(instrumental)
     target_len = max(len(vocals), inst.shape[0])
+    if backing_mono is not None:
+        target_len = max(target_len, len(backing_mono))
     if len(vocals) < target_len:
         vocals = np.pad(vocals, (0, target_len - len(vocals)))
     if inst.shape[0] < target_len:
         pad = np.zeros((target_len - inst.shape[0], inst.shape[1]), dtype=np.float32)
         inst = np.vstack([inst, pad])
+    if backing_mono is not None and len(backing_mono) < target_len:
+        backing_mono = np.pad(backing_mono, (0, target_len - len(backing_mono)))
 
     if inst.shape[1] == 1:
         mixed = vocals[:target_len] + inst[:, 0]
+        if backing_mono is not None:
+            mixed = mixed + backing_mono[:target_len]
         return np.stack([mixed, mixed], axis=1).astype(np.float32)
 
     vocal_stereo = np.stack([vocals[:target_len], vocals[:target_len]], axis=1)
-    return (vocal_stereo + inst[:target_len]).astype(np.float32)
+    out = (vocal_stereo + inst[:target_len]).astype(np.float32)
+    if backing_mono is not None:
+        b = backing_mono[:target_len]
+        out[:, 0] += b
+        out[:, 1] += b
+    return out
 
 
 def write_flac(path: Path, audio: np.ndarray, sr: int) -> None:
@@ -819,6 +835,9 @@ def merge_audio(
     clean_instrumental_flag: bool = False,
     vocals_gain_db: float = 0.0,
     instrumental_gain_db: float = 0.0,
+    backing_vocals: Path | None = None,
+    backing_gain_db: float = 0.0,
+    include_backing: bool = True,
     skip_mastering: bool = False,
     model_dir: Path = DEFAULT_MODEL_DIR,
     on_line: Callable[[str], None] | None = None,
@@ -881,6 +900,16 @@ def merge_audio(
     inst_audio, inst_sr = load_audio(instrumental)
     inst_audio = resample_audio(inst_audio, inst_sr, TARGET_SR)
 
+    backing_audio: np.ndarray | None = None
+    use_backing = include_backing and backing_vocals is not None and Path(backing_vocals).is_file()
+    if use_backing:
+        assert backing_vocals is not None
+        backing_raw, backing_sr = load_audio(backing_vocals)
+        backing_audio = resample_audio(backing_raw, backing_sr, TARGET_SR)
+        if clean_instrumental_flag and on_line:
+            on_line("clean_instrumental ignored: three-stem merge with backing_vocals")
+        clean_instrumental_flag = False
+
     inst_path = instrumental
     if clean_instrumental_flag and profile.karaoke_clean:
         if on_line:
@@ -893,7 +922,14 @@ def merge_audio(
         vocal_track, inst_audio = apply_pedalboard(vocal_track, inst_audio, TARGET_SR)
         write_flac(vocals_out, vocal_track, TARGET_SR)
 
-    mixed = mix_tracks(vocal_track, inst_audio, vocals_gain_db, instrumental_gain_db)
+    mixed = mix_tracks(
+        vocal_track,
+        inst_audio,
+        vocals_gain_db,
+        instrumental_gain_db,
+        backing=backing_audio,
+        backing_gain_db=backing_gain_db,
+    )
     mixed_path = output_dir / "mixed.flac"
     write_flac(mixed_path, mixed, TARGET_SR)
 
@@ -919,6 +955,9 @@ def main() -> int:
     parser.add_argument("-o", "--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--profile", choices=sorted(PROFILES), default="full")
     parser.add_argument("--clean-instrumental", action="store_true")
+    parser.add_argument("--backing-vocals", type=Path, help="Backing vocals stem for three-stem merge")
+    parser.add_argument("--backing-gain", type=float, default=0.0, help="Backing vocals gain in dB")
+    parser.add_argument("--no-backing", action="store_true", help="Do not include backing even if path is set")
     parser.add_argument("--vocals-gain", type=float, default=0.0)
     parser.add_argument("--instrumental-gain", type=float, default=0.0)
     parser.add_argument("--skip-mastering", action="store_true")
@@ -938,6 +977,9 @@ def main() -> int:
             clean_instrumental_flag=args.clean_instrumental,
             vocals_gain_db=args.vocals_gain,
             instrumental_gain_db=args.instrumental_gain,
+            backing_vocals=args.backing_vocals,
+            backing_gain_db=args.backing_gain,
+            include_backing=not args.no_backing,
             skip_mastering=args.skip_mastering,
             model_dir=args.model_dir,
         )

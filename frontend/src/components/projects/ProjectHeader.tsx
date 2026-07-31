@@ -8,7 +8,7 @@ import { useProjects } from '@/hooks/useProjects'
 import { STAGE_LABELS, stageStatusIcon } from '@/lib/format'
 import type { StageName } from '@/types/pipeline'
 
-const STAGE_ORDER: StageName[] = ['separate', 'slice', 'convert', 'merge']
+const STAGE_ORDER: StageName[] = ['separate', 'deharmonize', 'slice', 'convert', 'merge']
 
 export function ProjectHeader() {
   const { projectId } = useProject()
