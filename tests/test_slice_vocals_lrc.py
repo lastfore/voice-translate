@@ -750,6 +750,14 @@ def test_phoneme_fallback_only_skip_counts_in_manifest(tmp_path: Path, lrc_mod, 
         return PhonemeAlignResult(skipped=True, reason="not_fallback_boundary")
 
     monkeypatch.setattr(lrc_mod, "refine_boundary", fake_refine_boundary)
+    monkeypatch.setattr(
+        lrc_mod,
+        "run_phoneme_align_subprocess",
+        lambda _vocals, jobs: [
+            {"boundary_index": j["boundary_index"], "onset_ms": None, "skip_reason": "not_fallback_boundary"}
+            for j in jobs
+        ],
+    )
 
     _, _, manifest = lrc_mod.slice_vocals_lrc(
         lrc_path,

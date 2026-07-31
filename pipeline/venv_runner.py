@@ -107,6 +107,11 @@ def separator_env(extra: dict[str, str] | None = None) -> dict[str, str]:
             "TORCH_HOME": str(get_separator_env() / "models" / "torch-hub"),
             "HF_HOME": str(get_separator_env() / "models" / "hf-cache"),
             "AUDIO_SEPARATOR_MODEL_DIR": str(model_dir),
+            # phoneme_align local_cpu on Windows CPU: avoid Torch/BLAS thread crash
+            "OMP_NUM_THREADS": "1",
+            "MKL_NUM_THREADS": "1",
+            "CUDA_VISIBLE_DEVICES": "",
+            "TOKENIZERS_PARALLELISM": "false",
         }
     )
     if extra:

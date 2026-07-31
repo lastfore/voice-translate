@@ -16,7 +16,18 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 from lrc_g2p_preroll import lookup_preroll_ms
-from phoneme_align import PhonemeAlignMode, refine_boundary
+from phoneme_align import (
+    PhonemeAlignMode,
+    PhonemeAlignResult,
+    align_text_snippet,
+    crash_retry_count,
+    crash_retry_delay_s,
+    inter_boundary_delay_s,
+    refine_boundary,
+    run_phoneme_align_subprocess,
+    sleep_crash_retry_delay,
+    sleep_inter_boundary_delay,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SLICES_ROOT = ROOT / "output" / "slices"
@@ -62,6 +73,9 @@ class BoundaryParams:
     phoneme_align_fallback_only: bool = True
     phoneme_align_remote_url: str = ""
     phoneme_align_remote_timeout_s: int = 30
+    phoneme_align_inter_delay_s: float = -1.0
+    phoneme_align_crash_retry_delay_s: float = -1.0
+    phoneme_align_crash_retries: int = -1
 
 
 @dataclass(frozen=True)
@@ -551,6 +565,8 @@ def compute_boundaries(
     sr: int,
     duration_ms: float,
     params: BoundaryParams,
+    *,
+    vocals_path: Path | None = None,
 ) -> tuple[list[float], list[bool], list[BoundaryDiagnostic], int, int, dict[str, int]]:
     """Return aligned start_ms per slice, entry-boundary fallback flags, and diagnostics."""
     n = len(lyrics)
@@ -560,6 +576,71 @@ def compute_boundaries(
     phoneme_applied_count = 0
     phoneme_skipped_remote_count = 0
     phoneme_skip_counts: dict[str, int] = {}
+    use_phoneme_subprocess = (
+        params.phoneme_align_mode == PhonemeAlignMode.LOCAL_CPU.value
+        and vocals_path is not None
+        and vocals_path.is_file()
+    )
+    inter_delay_s = (
+        params.phoneme_align_inter_delay_s
+        if params.phoneme_align_inter_delay_s >= 0
+        else inter_boundary_delay_s()
+    )
+    crash_delay_s = (
+        params.phoneme_align_crash_retry_delay_s
+        if params.phoneme_align_crash_retry_delay_s >= 0
+        else crash_retry_delay_s()
+    )
+    max_crash_attempts = (
+        params.phoneme_align_crash_retries
+        if params.phoneme_align_crash_retries > 0
+        else crash_retry_count()
+    )
+
+    def _apply_phoneme_result(
+        boundary_index: int,
+        result: BoundaryDetectionResult,
+        g2p_used: float,
+        next_lrc: float,
+        next_line_end_ms: float,
+        align_result: PhonemeAlignResult,
+    ) -> tuple[BoundaryDetectionResult, bool, str]:
+        phoneme_applied = False
+        phoneme_skip_reason = ""
+        if align_result.skipped and align_result.reason:
+            phoneme_skip_reason = align_result.reason
+            phoneme_skip_counts[align_result.reason] = (
+                phoneme_skip_counts.get(align_result.reason, 0) + 1
+            )
+        if align_result.reason == "remote_not_implemented":
+            nonlocal phoneme_skipped_remote_count
+            phoneme_skipped_remote_count += 1
+        if align_result.onset_ms is not None:
+            refined = _apply_min_slice_guard(
+                align_result.onset_ms,
+                line_start_ms=starts[boundary_index],
+                next_lrc_ts=next_lrc,
+                next_line_end_ms=next_line_end_ms,
+                min_slice_ms=params.min_slice_ms,
+                safety_margin_ms=params.safety_margin_ms,
+                method="phoneme",
+            )
+            if not refined.fallback:
+                result = refined
+                phoneme_applied = True
+                nonlocal phoneme_applied_count
+                phoneme_applied_count += 1
+        return result, phoneme_applied, phoneme_skip_reason
+
+    def _subprocess_align_result(item: dict[str, object]) -> PhonemeAlignResult:
+        skip = str(item.get("skip_reason") or "")
+        onset = item.get("onset_ms")
+        return PhonemeAlignResult(
+            onset_ms=float(onset) if onset is not None else None,
+            skipped=onset is None,
+            reason=skip or ("phoneme_local" if onset is not None else "phoneme_align_error"),
+            method="phoneme_local" if onset is not None else "",
+        )
 
     for i in range(n - 1):
         next_lrc = lyrics[i + 1].start_ms
@@ -593,50 +674,70 @@ def compute_boundaries(
         phoneme_applied = False
         phoneme_skip_reason = ""
         if params.phoneme_align_mode != PhonemeAlignMode.OFF.value:
-            align_window_start = max(
-                starts[i] + params.min_slice_ms,
-                next_lrc - params.search_margin_ms,
-            )
-            if params.g2p_preroll_ms > 0:
-                pre_roll = lookup_preroll_ms(lyrics[i + 1].text, params.g2p_preroll_ms)
-                if pre_roll > 0:
-                    align_window_start = max(
-                        align_window_start,
-                        next_lrc - max(params.search_margin_ms, int(pre_roll)),
+            if params.phoneme_align_fallback_only and not result.fallback:
+                phoneme_skip_reason = "not_fallback_boundary"
+                phoneme_skip_counts["not_fallback_boundary"] = (
+                    phoneme_skip_counts.get("not_fallback_boundary", 0) + 1
+                )
+            else:
+                align_window_start = max(
+                    starts[i] + params.min_slice_ms,
+                    next_lrc - params.search_margin_ms,
+                )
+                if params.g2p_preroll_ms > 0:
+                    pre_roll = lookup_preroll_ms(lyrics[i + 1].text, params.g2p_preroll_ms)
+                    if pre_roll > 0:
+                        align_window_start = max(
+                            align_window_start,
+                            next_lrc - max(params.search_margin_ms, int(pre_roll)),
+                        )
+                if use_phoneme_subprocess:
+                    assert vocals_path is not None
+                    job = {
+                        "boundary_index": i,
+                        "text": align_text_snippet(lyrics[i + 1].text),
+                        "window_start_ms": align_window_start,
+                        "window_end_ms": next_lrc + 50.0,
+                    }
+                    align_result = PhonemeAlignResult(
+                        skipped=True, reason="phoneme_align_subprocess_crash"
                     )
-            align_result = refine_boundary(
-                mode=params.phoneme_align_mode,
-                audio=audio,
-                sr=sr,
-                next_line_text=lyrics[i + 1].text,
-                window_start_ms=align_window_start,
-                window_end_ms=next_lrc + 50.0,
-                fallback=result.fallback,
-                fallback_only=params.phoneme_align_fallback_only,
-                remote_url=params.phoneme_align_remote_url,
-                remote_timeout_s=params.phoneme_align_remote_timeout_s,
-            )
-            if align_result.skipped and align_result.reason:
-                phoneme_skip_reason = align_result.reason
-                phoneme_skip_counts[align_result.reason] = (
-                    phoneme_skip_counts.get(align_result.reason, 0) + 1
-                )
-            if align_result.reason == "remote_not_implemented":
-                phoneme_skipped_remote_count += 1
-            if align_result.onset_ms is not None:
-                refined = _apply_min_slice_guard(
-                    align_result.onset_ms,
-                    line_start_ms=starts[i],
-                    next_lrc_ts=next_lrc,
-                    next_line_end_ms=next_line_end_ms,
-                    min_slice_ms=params.min_slice_ms,
-                    safety_margin_ms=params.safety_margin_ms,
-                    method="phoneme",
-                )
-                if not refined.fallback:
-                    result = refined
-                    phoneme_applied = True
-                    phoneme_applied_count += 1
+                    for attempt in range(max_crash_attempts):
+                        try:
+                            raw = run_phoneme_align_subprocess(vocals_path, [job])
+                            align_result = _subprocess_align_result(raw[0])
+                            break
+                        except RuntimeError as exc:
+                            if "native crash" not in str(exc):
+                                raise
+                            if attempt >= max_crash_attempts - 1:
+                                align_result = PhonemeAlignResult(
+                                    skipped=True,
+                                    reason="phoneme_align_subprocess_crash",
+                                    message=str(exc)[-200:],
+                                )
+                            else:
+                                sleep_crash_retry_delay(crash_delay_s)
+                    sleep_inter_boundary_delay(inter_delay_s)
+                    result, phoneme_applied, phoneme_skip_reason = _apply_phoneme_result(
+                        i, result, g2p_used, next_lrc, next_line_end_ms, align_result
+                    )
+                else:
+                    align_result = refine_boundary(
+                        mode=params.phoneme_align_mode,
+                        audio=audio,
+                        sr=sr,
+                        next_line_text=lyrics[i + 1].text,
+                        window_start_ms=align_window_start,
+                        window_end_ms=next_lrc + 50.0,
+                        fallback=result.fallback,
+                        fallback_only=params.phoneme_align_fallback_only,
+                        remote_url=params.phoneme_align_remote_url,
+                        remote_timeout_s=params.phoneme_align_remote_timeout_s,
+                    )
+                    result, phoneme_applied, phoneme_skip_reason = _apply_phoneme_result(
+                        i, result, g2p_used, next_lrc, next_line_end_ms, align_result
+                    )
 
         starts.append(result.t_cut)
         fallbacks.append(result.fallback)
@@ -730,8 +831,13 @@ def slice_vocals_lrc(
         phoneme_align_remote_timeout_s=phoneme_align_remote_timeout_s,
     )
 
+    if phoneme_align_mode == PhonemeAlignMode.LOCAL_CPU.value:
+        pass  # phoneme align runs per-boundary in separator-env subprocess
+
     starts, fallbacks, diagnostics, phoneme_applied_count, phoneme_skipped_remote_count, phoneme_skip_counts = (
-        compute_boundaries(lyrics, audio, sr, duration_ms, params)
+        compute_boundaries(
+            lyrics, audio, sr, duration_ms, params, vocals_path=vocals_path.resolve()
+        )
     )
 
     aligned_count = 0

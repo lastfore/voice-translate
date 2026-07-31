@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
+import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -45,6 +47,29 @@ def _load_script_module(name: str, filename: str):
 def _phoneme_align_needs_subprocess(phoneme_align_mode: str) -> bool:
     """Torch MMS in uvicorn worker thread can crash on Windows; isolate in subprocess."""
     return phoneme_align_mode == "local_cpu"
+
+
+def _format_subprocess_failure(result: subprocess.CompletedProcess[str], *, cmd_name: str) -> str:
+    raw = ((result.stdout or "") + (result.stderr or "")).strip()
+    code = result.returncode
+    lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+    # Drop tqdm progress-only lines so crashes surface real tracebacks.
+    useful = [
+        ln
+        for ln in lines
+        if not re.match(r"^(Loading weights:|Warning: You are sending)", ln)
+        and "|" not in ln[:40]
+    ]
+    detail = "\n".join(useful[-20:]) if useful else raw[-2000:]
+    if code == 0:
+        return detail or f"{cmd_name} failed without output"
+    if code == -1073741819 or code == 3221225477:
+        hint = (
+            "native crash (ACCESS_VIOLATION) in phoneme/Torch subprocess; "
+            "retry after API restart or check OMP/MKL thread limits"
+        )
+        return f"{cmd_name} exit={code} {hint}" + (f"\n{detail}" if detail else "")
+    return f"{cmd_name} exit={code}" + (f"\n{detail}" if detail else "")
 
 
 def _log_lrc_boundaries(
@@ -181,8 +206,7 @@ def _run_lrc_slice_subprocess(
         on_line=_on_line if stage_log else None,
     )
     if result.returncode != 0:
-        detail = ((result.stdout or "") + (result.stderr or "")).strip()
-        raise RuntimeError(detail or f"slice-vocals-lrc.py exited with code {result.returncode}")
+        raise RuntimeError(_format_subprocess_failure(result, cmd_name="slice-vocals-lrc.py"))
 
     manifest_path = output_dir / "manifest.json"
     if not manifest_path.is_file():
